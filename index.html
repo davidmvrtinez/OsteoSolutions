@@ -282,6 +282,7 @@ function BarcodeScanner({ bin, onAdd, onClose, gtinMap, onSaveGtinMapping }) {
   const [pendingRef,  setPendingRef]  = useState('');
   const [pendingLot,  setPendingLot]  = useState('');
   const [pendingExp,  setPendingExp]  = useState('');
+  const [rawScan,     setRawScan]     = useState('');    // debug: raw barcode string
   const [camError,    setCamError]    = useState('');
   const [ready,       setReady]       = useState(false);
   const [addedFlash,  setAddedFlash]  = useState(false);
@@ -322,6 +323,7 @@ function BarcodeScanner({ bin, onAdd, onClose, gtinMap, onSaveGtinMapping }) {
             // Keep cooldown active while review card is shown; reset when dismissed
             try { navigator.vibrate && navigator.vibrate([100]); } catch(_) {}
 
+            setRawScan(raw);  // debug
             const p = parseBarcode(raw);
             const looked = lookupProduct(p.gtin14, gtinMap);
             const resolvedRef = looked.productNumber;   // '' if unknown GTIN
@@ -491,6 +493,13 @@ function BarcodeScanner({ bin, onAdd, onClose, gtinMap, onSaveGtinMapping }) {
             {pendingRef && CATALOG[pendingRef] && (
               <div style={{color:'#7dd3fc',fontSize:12,marginBottom:10,padding:'6px 10px',background:'rgba(59,130,246,.15)',borderRadius:7}}>
                 {CATALOG[pendingRef]}
+              </div>
+            )}
+
+            {rawScan && (
+              <div style={{color:'#6b7280',fontSize:10,marginBottom:8,padding:'5px 8px',background:'rgba(0,0,0,.25)',borderRadius:6,wordBreak:'break-all',fontFamily:'monospace'}}>
+                <span style={{color:'#475569',fontWeight:700}}>RAW: </span>
+                {rawScan.replace(/[\x1d\x1c\x1e\x1f\x04]/g,'[FNC1]')}
               </div>
             )}
 
