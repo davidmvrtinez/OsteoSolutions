@@ -193,17 +193,24 @@ function parseBarcode(raw) {
   return { gtin14, lotNumber, expDate };
 }
 
-// Try several key formats against CATALOG to handle different GS1 structures
-function lookupProduct(gtin14) {
-  if (!gtin14) return { productNumber: '', productName: '' };
-  const stripped = gtin14.replace(/^0+/, '');           // remove all leading zeros
-  const noCheck  = stripped.slice(0, -1);               // drop GS1 check digit
+// Try several key formats against CATALOG to handle different GS1 structures.
+// gtinMap is the user-built GTIN->REF table (persisted to OneDrive).
+function lookupProduct(gtin14, gtinMap) {
+  if (!gtin14) return { productNumber: '', productName: '', isNew: false };
+  // 1. Check user-saved GTIN->REF mapping first (highest priority)
+  const mappedRef = gtinMap && gtinMap[gtin14];
+  if (mappedRef) {
+    return { productNumber: mappedRef, productName: CATALOG[mappedRef] || '', isNew: false };
+  }
+  // 2. Try catalog lookup by GTIN key variants
+  const stripped = gtin14.replace(/^0+/, '');
+  const noCheck  = stripped.slice(0, -1);
   const noCheckFull = gtin14.slice(0, -1).replace(/^0+/, '');
   for (const key of [gtin14, stripped, noCheck, noCheckFull]) {
-    if (key && CATALOG[key]) return { productNumber: key, productName: CATALOG[key] };
+    if (key && CATALOG[key]) return { productNumber: key, productName: CATALOG[key], isNew: false };
   }
-  // Not in catalog - use stripped number as productNumber, productName empty
-  return { productNumber: noCheck || stripped || gtin14, productName: '' };
+  // 3. Unknown GTIN - signal caller to ask user for REF
+  return { productNumber: '', productName: '', isNew: true };
 }
 function daysUntil(d) { return d ? Math.ceil((new Date(d) - new Date()) / 86400000) : null; }
 function fmtDate(d) { if (!d) return '—'; const [y,m,dd] = d.split('-'); return `${m}/${dd}/${y}`; }
@@ -251,7 +258,7 @@ function BinSelector({ value, onChange, bins, customValue, onCustomChange }) {
 }
 
 // ── Barcode Scanner — ZXing (works on iOS Safari, Android, all browsers) ──────
-function BarcodeScanner({ bin, onAdd, onClose }) {
+function BarcodeScanner({ bin, onAdd, onClose, gtinMap, onSaveGtinMapping }) {
   const videoRef   = useRef(null);
   const readerRef  = useRef(null);
   const controlRef = useRef(null);
@@ -303,11 +310,13 @@ function BarcodeScanner({ bin, onAdd, onClose }) {
             try { navigator.vibrate && navigator.vibrate([100]); } catch(_) {}
 
             const p = parseBarcode(raw);
-            const looked = lookupProduct(p.gtin14);
+            const looked = lookupProduct(p.gtin14, gtinMap);
+            const resolvedRef = looked.productNumber;   // '' if unknown GTIN
             const item = {
               id: Date.now() + Math.random(),
-              productNumber: looked.productNumber || p.gtin14 || raw.trim(),
-              productName: looked.productName || (p.gtin14 ? 'GTIN: ' + p.gtin14 : raw.trim()),
+              _gtin14: p.gtin14,                        // keep for mapping save
+              productNumber: resolvedRef || p.gtin14 || raw.trim(),
+              productName: looked.productName || '',
               lot: p.lotNumber,
               expDate: p.expDate || null,
               bin: bin || '',
@@ -316,7 +325,7 @@ function BarcodeScanner({ bin, onAdd, onClose }) {
             };
             // Show review card — don't add yet
             setPending(item);
-            setPendingRef(item.productNumber);
+            setPendingRef(resolvedRef);  // blank when GTIN is new, user must type
             setPendingLot(item.lot || '');
             setPendingExp(item.expDate || '');
           }
@@ -343,12 +352,20 @@ function BarcodeScanner({ bin, onAdd, onClose }) {
 
   function confirmAdd() {
     if (!pending) return;
+    const finalRef = pendingRef.trim();
+    // If user typed a REF and this GTIN was previously unknown, save the mapping
+    if (finalRef && pending._gtin14 && onSaveGtinMapping) {
+      const wasUnknown = !lookupProduct(pending._gtin14, gtinMap).productNumber;
+      if (wasUnknown) onSaveGtinMapping(pending._gtin14, finalRef);
+    }
     const confirmed = {
       ...pending,
-      productNumber: pendingRef || pending.productNumber,
+      productNumber: finalRef || pending._gtin14 || pending.productNumber,
+      productName: (finalRef && CATALOG[finalRef]) || pending.productName || '',
       lot: pendingLot || pending.lot,
       expDate: pendingExp || pending.expDate,
     };
+    delete confirmed._gtin14;
     onAdd(confirmed);
     setScanned(prev => [confirmed, ...prev.slice(0, 49)]);
     setPending(null);
@@ -406,49 +423,71 @@ function BarcodeScanner({ bin, onAdd, onClose }) {
         </div>
 
         {/* ── Review card: shown after scan, before confirm ── */}
-        {pending && (
-          <div style={{background:'#1e3a5f',borderRadius:14,padding:16,animation:'flashIn .2s ease-out',border:'2px solid #22c55e'}}>
-            <div style={{color:'#86efac',fontSize:12,fontWeight:800,letterSpacing:1,marginBottom:12}}>BARCODE DETECTED \u2014 REVIEW &amp; CONFIRM</div>
+        {pending && (() => {
+          const isNewProduct = !pendingRef;
+          return (
+          <div style={{background:'#1e3a5f',borderRadius:14,padding:16,animation:'flashIn .2s ease-out',border:`2px solid ${isNewProduct ? '#f59e0b' : '#22c55e'}`}}>
 
-            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:10}}>
-              <div>
-                <div style={{color:'#94a3b8',fontSize:11,fontWeight:700,marginBottom:4}}>REF</div>
-                <input
-                  value={pendingRef}
-                  onChange={e=>setPendingRef(e.target.value)}
-                  style={{background:'#0f2744',border:'1.5px solid #334155',borderRadius:8,padding:'9px 11px',color:'#f1f5f9',fontSize:14,fontWeight:700,width:'100%'}}
-                />
+            {/* Header */}
+            {isNewProduct ? (
+              <div style={{background:'#78350f',borderRadius:8,padding:'8px 12px',marginBottom:12,display:'flex',gap:8,alignItems:'flex-start'}}>
+                <span style={{fontSize:16}}>\u26a0\ufe0f</span>
+                <div>
+                  <div style={{color:'#fbbf24',fontSize:12,fontWeight:800}}>NEW PRODUCT — ENTER REF FROM LABEL</div>
+                  <div style={{color:'#fde68a',fontSize:11,marginTop:2}}>LOT & Expiry were read from barcode. Type the REF you see on the label — it will be remembered for all future scans.</div>
+                </div>
               </div>
-              <div>
-                <div style={{color:'#94a3b8',fontSize:11,fontWeight:700,marginBottom:4}}>LOT</div>
-                <input
-                  value={pendingLot}
-                  onChange={e=>setPendingLot(e.target.value)}
-                  style={{background:'#0f2744',border:'1.5px solid #334155',borderRadius:8,padding:'9px 11px',color:'#f1f5f9',fontSize:14,fontWeight:700,width:'100%'}}
-                />
-              </div>
-            </div>
+            ) : (
+              <div style={{color:'#86efac',fontSize:12,fontWeight:800,letterSpacing:1,marginBottom:12}}>\u2713 BARCODE SCANNED — REVIEW &amp; CONFIRM</div>
+            )}
 
-            <div style={{marginBottom:14}}>
-              <div style={{color:'#94a3b8',fontSize:11,fontWeight:700,marginBottom:4}}>EXPIRY DATE</div>
+            {/* REF */}
+            <div style={{marginBottom:10}}>
+              <div style={{color: isNewProduct ? '#fbbf24' : '#94a3b8',fontSize:11,fontWeight:700,marginBottom:4}}>
+                REF {isNewProduct ? '(read from label — required)' : ''}
+              </div>
               <input
-                type="date"
-                value={pendingExp}
-                onChange={e=>setPendingExp(e.target.value)}
-                style={{background:'#0f2744',border:'1.5px solid #334155',borderRadius:8,padding:'9px 11px',color:'#f1f5f9',fontSize:14,fontWeight:700,width:'100%'}}
+                value={pendingRef}
+                onChange={e=>setPendingRef(e.target.value)}
+                placeholder={isNewProduct ? 'e.g. 520-46-020' : ''}
+                autoFocus={isNewProduct}
+                style={{background:'#0f2744',border:`1.5px solid ${isNewProduct ? '#f59e0b' : '#334155'}`,borderRadius:8,padding:'9px 11px',color: isNewProduct ? '#fde68a' : '#f1f5f9',fontSize:14,fontWeight:700,width:'100%'}}
               />
             </div>
 
-            {pending.productName && !pending.productName.startsWith('GTIN:') && (
-              <div style={{color:'#7dd3fc',fontSize:12,marginBottom:12}}>{pending.productName}</div>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:10}}>
+              <div>
+                <div style={{color:'#94a3b8',fontSize:11,fontWeight:700,marginBottom:4}}>LOT \u2713 from barcode</div>
+                <input
+                  value={pendingLot}
+                  onChange={e=>setPendingLot(e.target.value)}
+                  style={{background:'#0f2744',border:'1.5px solid #334155',borderRadius:8,padding:'9px 11px',color:'#86efac',fontSize:14,fontWeight:700,width:'100%'}}
+                />
+              </div>
+              <div>
+                <div style={{color:'#94a3b8',fontSize:11,fontWeight:700,marginBottom:4}}>EXPIRY \u2713 from barcode</div>
+                <input
+                  type="date"
+                  value={pendingExp}
+                  onChange={e=>setPendingExp(e.target.value)}
+                  style={{background:'#0f2744',border:'1.5px solid #334155',borderRadius:8,padding:'9px 11px',color:'#86efac',fontSize:14,fontWeight:700,width:'100%'}}
+                />
+              </div>
+            </div>
+
+            {pendingRef && CATALOG[pendingRef] && (
+              <div style={{color:'#7dd3fc',fontSize:12,marginBottom:10,padding:'6px 10px',background:'rgba(59,130,246,.15)',borderRadius:7}}>
+                {CATALOG[pendingRef]}
+              </div>
             )}
 
             <div style={{display:'flex',gap:10}}>
               <button
                 onClick={confirmAdd}
-                style={{flex:2,background:'#16a34a',color:'#fff',border:'none',borderRadius:10,padding:'13px',fontWeight:800,fontSize:15,cursor:'pointer'}}
+                disabled={isNewProduct && !pendingRef.trim()}
+                style={{flex:2,background: (isNewProduct && !pendingRef.trim()) ? '#374151' : '#16a34a',color:'#fff',border:'none',borderRadius:10,padding:'13px',fontWeight:800,fontSize:15,cursor: (isNewProduct && !pendingRef.trim()) ? 'not-allowed' : 'pointer',opacity: (isNewProduct && !pendingRef.trim()) ? .5 : 1}}
               >
-                \u2713 Add to {bin||'Bin'}
+                {isNewProduct ? (pendingRef.trim() ? '\u2713 Save REF & Add' : 'Enter REF first') : `\u2713 Add to ${bin||'Bin'}`}
               </button>
               <button
                 onClick={dismissPending}
@@ -457,8 +496,15 @@ function BarcodeScanner({ bin, onAdd, onClose }) {
                 Rescan
               </button>
             </div>
+
+            {isNewProduct && (
+              <div style={{color:'#6b7280',fontSize:11,marginTop:8,textAlign:'center'}}>
+                After saving, this product will auto-fill on every future scan.
+              </div>
+            )}
           </div>
-        )}
+          );
+        })()}
 
         {/* Added flash */}
         {addedFlash && !pending && (
@@ -699,7 +745,7 @@ function AlertsTab({ items }) {
 // ── Main App ──────────────────────────────────────────────────────────────────
 function App() {
   const [token, setToken] = useState(null);
-  const [data, setData] = useState({ inventory: [], bins: [] });
+  const [data, setData] = useState({ inventory: [], bins: [], gtinMap: {} });
   const [activeTab, setActiveTab] = useState('add');
   const [syncStatus, setSyncStatus] = useState('ok');
   const [syncMsg, setSyncMsg] = useState('');
@@ -725,7 +771,7 @@ function App() {
     setSyncStatus('pending'); setSyncMsg('Loading from OneDrive...');
     try {
       const d = await readOneDrive(t);
-      if (d && d.inventory) setData({bins:[], ...d});
+      if (d && d.inventory) setData({bins:[], gtinMap:{}, ...d});
       else setData({ inventory: [], bins: [] });
       setSyncStatus('ok'); setSyncMsg('Synced with OneDrive ✓');
     } catch(e) {
@@ -768,6 +814,10 @@ function App() {
   function addItem(item) { setData(d=>({...d,inventory:[item,...d.inventory]})); setActiveTab('bins'); }
   function addItemFromScan(item) { setData(d=>({...d,inventory:[item,...d.inventory]})); } // no tab switch
   function removeItem(id) { setData(d=>({...d,inventory:d.inventory.filter(i=>i.id!==id)})); }
+  function saveGtinMapping(gtin14, ref) {
+    if (!gtin14 || !ref) return;
+    setData(d => ({...d, gtinMap: {...(d.gtinMap||{}), [gtin14]: ref}}));
+  }
   function updateItem(id,u) { setData(d=>({...d,inventory:d.inventory.map(i=>i.id===id?{...i,...u}:i)})); }
   function createBin(name) { setData(d=>({...d,bins:[...d.bins.filter(b=>b!==name),name].sort()})); }
   function deleteBin(name) { setData(d=>({...d,bins:d.bins.filter(b=>b!==name)})); }
@@ -788,7 +838,7 @@ function App() {
   return (
     <div>
       {/* Scanner overlay at App level — survives tab switches */}
-      {scanning && <BarcodeScanner bin={scanBinActive} onAdd={addItemFromScan} onClose={stopScan}/>}
+      {scanning && <BarcodeScanner bin={scanBinActive} onAdd={addItemFromScan} onClose={stopScan} gtinMap={data.gtinMap||{}} onSaveGtinMapping={saveGtinMapping}/>}
 
       <div className="header">
         <img src={LOGO_URI} alt="OsteoSolutions" style={{height:40}}/>
