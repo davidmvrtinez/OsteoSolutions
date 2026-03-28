@@ -647,7 +647,7 @@ function AddTab({ onAdd, bins, onStartScan }) {
           <div className="grid-2" style={{marginBottom:12}}><div><label>Expiry Date</label><input type="date" value={exp} onChange={e=>setExp(e.target.value)}/></div><div><label>Quantity</label><input type="number" min="1" value={qty} onChange={e=>setQty(e.target.value)}/></div></div>
           <div style={{marginBottom:getManualBin()||manBin==='__new__'?8:16}}>
             <label>Bin / Location</label>
-            <BinSelector value={manBin} onChange={setManBin} customValue={manCustomBin} onCustomChange={setManCustomBin}/>
+            <BinSelector value={manBin} onChange={setManBin} bins={bins} customValue={manCustomBin} onCustomChange={setManCustomBin}/>
           </div>
           {msg && <div className={`alert ${msg.t==='e'?'alert-red':'alert-green'}`} style={{marginBottom:12}}>{msg.m}</div>}
           <button type="submit" className="btn btn-primary">Add to Inventory</button>
