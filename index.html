@@ -181,8 +181,21 @@ function parseBarcode(raw) {
       }
       // AI 11/13/15/16 - other date fields, fixed 6 digits, skip
       if (/^(11|13|15|16)/.test(rest) && /^\d{6}/.test(rest.slice(2,8))) { i += 8; continue; }
-      // AI 10 - Lot, variable length to end of segment
-      if (rest.startsWith('10')) { if (!lotNumber) lotNumber = rest.slice(2).trim(); break; }
+      // AI 10 - Lot, variable length; stop if AI 17 (expiry) follows without FNC1 separator
+      if (rest.startsWith('10')) {
+        if (!lotNumber) {
+          const afterLot = rest.slice(2);
+          // Look ahead for AI 17 + valid YYMMDD (year 20-39, month 01-12) as implicit terminator
+          const expStop = afterLot.match(/17([2-3]\d(?:0[1-9]|1[0-2])\d{2})/);
+          if (expStop && expStop.index !== undefined) {
+            lotNumber = afterLot.slice(0, expStop.index).trim();
+            if (!expDate) { const d=expStop[1]; expDate=`20${d.slice(0,2)}-${d.slice(2,4)}-${d.slice(4,6)}`; }
+          } else {
+            lotNumber = afterLot.trim();
+          }
+        }
+        break;
+      }
       // AI 21 - Serial, variable length, skip
       if (rest.startsWith('21')) { break; }
       // Unknown - advance one char to avoid infinite loop
