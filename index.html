@@ -7929,6 +7929,31 @@ const CATALOG = {"800-06-038":"INS, KNEE, EMPOWR, Femoral Preparation Guide, 8mm
 function parseBarcode(raw) {
   let gtin14 = '', lotNumber = '', expDate = null;
 
+  // Format 0: Enovis fixed GS1-128 format (e.g. "010088891207873310180R206517300411")
+  // GTIN is always at characters 3-16 (indices 2-15) — exactly 14 digits after the "01" AI prefix.
+  // LOT follows "10" AI at index 16, expiry follows "17" AI.
+  if (raw.length >= 20 && raw.startsWith('01') && /^\d{14}/.test(raw.slice(2, 16))) {
+    gtin14 = raw.slice(2, 16);
+    const afterGtin = raw.slice(16);
+    // Extract LOT (AI 10) and expiry (AI 17) from the remainder
+    if (afterGtin.startsWith('10')) {
+      const afterLot = afterGtin.slice(2);
+      const expStop = afterLot.match(/17([2-3]\d(?:0[1-9]|1[0-2])\d{2})/);
+      if (expStop && expStop.index !== undefined) {
+        lotNumber = afterLot.slice(0, expStop.index).trim();
+        const d = expStop[1];
+        expDate = `20${d.slice(0,2)}-${d.slice(2,4)}-${d.slice(4,6)}`;
+      } else {
+        lotNumber = afterLot.trim();
+      }
+    } else {
+      // No LOT AI — scan remainder for expiry
+      const expStop = afterGtin.match(/17([2-3]\d(?:0[1-9]|1[0-2])\d{2})/);
+      if (expStop) { const d = expStop[1]; expDate = `20${d.slice(0,2)}-${d.slice(2,4)}-${d.slice(4,6)}`; }
+    }
+    return { gtin14, lotNumber, expDate };
+  }
+
   // Normalize: replace FNC1/GS control characters (0x1D etc.) with a pipe delimiter
   const norm = raw.replace(/[\x1d\x1c\x1e\x1f\x04]/g, '|');
 
