@@ -8882,7 +8882,14 @@ function App() {
         try { const fresh = await getToken(); if (fresh) t=fresh; } catch{}
         await writeOneDrive(t, data);
         // Also write Excel — each bin gets its own sheet
-        try { await writeOneDriveExcel(t, data.inventory||[], data.bins||[]); } catch(exErr) { console.warn('Excel write skipped:', exErr); }
+        try {
+          if (typeof XLSX !== 'undefined') {
+            await writeOneDriveExcel(t, data.inventory||[], data.bins||[]);
+          }
+        } catch(exErr) {
+          console.error('Excel write failed:', exErr);
+          setSyncStatus('error'); setSyncMsg('JSON saved but Excel failed: '+exErr.message);
+        }
         setSyncStatus('ok'); setSyncMsg('Saved to OneDrive ✓');
       } catch(e) { setSyncStatus('error'); setSyncMsg('Save failed: '+e.message); }
     }, 1000);
@@ -8903,13 +8910,21 @@ function App() {
   }
 
   async function syncExcelNow() {
+    if (typeof XLSX === 'undefined') {
+      setSyncStatus('error'); setSyncMsg('Excel library not loaded — check internet connection');
+      return;
+    }
     setSyncStatus('pending'); setSyncMsg('Exporting to Excel...');
     try {
       let t = token;
       try { const fresh = await getToken(); if (fresh) t=fresh; } catch{}
       await writeOneDriveExcel(t, data.inventory||[], data.bins||[]);
       setSyncStatus('ok'); setSyncMsg('Excel updated ✓');
-    } catch(e) { setSyncStatus('error'); setSyncMsg('Excel sync failed: '+e.message); }
+    } catch(e) {
+      setSyncStatus('error');
+      setSyncMsg('Excel sync failed: ' + (e.message || String(e)));
+      console.error('syncExcelNow error:', e);
+    }
   }
 
   // Scanner lives at App level so it survives tab switches
@@ -8918,10 +8933,12 @@ function App() {
 
   function mergeOrAdd(item, switchTab) {
     setData(d => {
+      const norm = v => (v == null ? '' : String(v).trim());
       const dup = d.inventory.find(i =>
-        (i.bin||'') === (item.bin||'') &&
-        i.productNumber === item.productNumber &&
-        (i.lot||'') === (item.lot||'')
+        norm(i.bin)           === norm(item.bin)           &&
+        norm(i.productNumber) === norm(item.productNumber) &&
+        norm(i.lot)           === norm(item.lot)           &&
+        norm(i.expDate)       === norm(item.expDate)
       );
       if (dup) {
         return {...d, inventory: d.inventory.map(i =>
@@ -8956,9 +8973,11 @@ function App() {
         try { const fresh = await getToken(); if (fresh) t=fresh; } catch{}
         const cleanData = {...data, inventory: deduped};
         await writeOneDrive(t, cleanData);
-        await writeOneDriveExcel(t, deduped, data.bins||[]);
+        if (typeof XLSX !== 'undefined') await writeOneDriveExcel(t, deduped, data.bins||[]);
         setMsg(`✅ Merged ${merged} duplicate entr${merged===1?'y':'ies'} & saved to Excel`);
-      } catch(e) { setMsg('⚠️ Merged locally but save failed: '+e.message); }
+      } catch(e) {
+        console.error('Dedup save error:', e);
+        setMsg('⚠️ Merged locally but save failed: '+(e.message||String(e))); }
     } else {
       setMsg('✅ No duplicates found — inventory is clean');
     }
