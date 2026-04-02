@@ -8089,6 +8089,22 @@ function lookupProduct(gtin14, gtinMap) {
   // 3. Unknown GTIN - signal caller to ask user for REF
   return { productNumber: '', productName: '', isNew: true };
 }
+// Merge items with identical REF + LOT + Expiry within the same bin; sum their quantities.
+function deduplicateInventory(inventory) {
+  const seen = {};
+  const out  = [];
+  for (const item of inventory) {
+    const key = `${item.bin||""}||${item.productNumber||""}||${item.lot||""}||${item.expDate||""}`;
+    if (seen[key] !== undefined) {
+      out[seen[key]].qty = (out[seen[key]].qty || 1) + (item.qty || 1);
+    } else {
+      seen[key] = out.length;
+      out.push({...item});
+    }
+  }
+  return out;
+}
+
 function daysUntil(d) { return d ? Math.ceil((new Date(d) - new Date()) / 86400000) : null; }
 function fmtDate(d) { if (!d) return '—'; const [y,m,dd] = d.split('-'); return `${m}/${dd}/${y}`; }
 function ExpiryBadge({ d }) {
@@ -8828,8 +8844,20 @@ function App() {
           try { await writeOneDriveExcel(t, inventory, bins); } catch(createErr) { console.warn('Excel create failed:', createErr); }
         }
       } catch(excelErr) { console.warn('Excel import skipped:', excelErr); }
-      setData({ inventory, bins, gtinMap });
+      // Deduplicate: merge identical REF+LOT+Expiry items in same bin
+      const dedupedInventory = deduplicateInventory(inventory);
+      const hadDups = dedupedInventory.length < inventory.length;
+      setData({ inventory: dedupedInventory, bins, gtinMap });
       setSyncStatus('ok'); setSyncMsg('Synced with OneDrive ✓');
+      // If duplicates were found, persist the cleaned data and update Excel
+      if (hadDups) {
+        const cleanData = { inventory: dedupedInventory, bins, gtinMap };
+        try {
+          await writeOneDrive(t, cleanData);
+          await writeOneDriveExcel(t, dedupedInventory, bins);
+          setSyncMsg('Duplicates merged & saved ✓');
+        } catch(saveErr) { console.warn('Dedup save failed:', saveErr); }
+      }
     } catch(e) {
       setSyncStatus('error'); setSyncMsg('Load failed: '+e.message);
     }
