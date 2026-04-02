@@ -8090,11 +8090,13 @@ function lookupProduct(gtin14, gtinMap) {
   return { productNumber: '', productName: '', isNew: true };
 }
 // Merge items with identical REF + LOT + Expiry within the same bin; sum their quantities.
+// Values are normalised (trimmed, null/undefined treated as "") before comparison.
 function deduplicateInventory(inventory) {
+  const norm = v => (v == null ? '' : String(v).trim());
   const seen = {};
   const out  = [];
   for (const item of inventory) {
-    const key = `${item.bin||""}||${item.productNumber||""}||${item.lot||""}||${item.expDate||""}`;
+    const key = [norm(item.bin), norm(item.productNumber), norm(item.lot), norm(item.expDate)].join('||');
     if (seen[key] !== undefined) {
       out[seen[key]].qty = (out[seen[key]].qty || 1) + (item.qty || 1);
     } else {
@@ -8733,7 +8735,7 @@ function BinCard({ binName, list, isPreCreated, onDeleteBin, onRemove, onUpdate 
 }
 
 // ── Bins Tab ──────────────────────────────────────────────────────────────────
-function BinsTab({ items, bins, onCreateBin, onDeleteBin, onRemove, onUpdate }) {
+function BinsTab({ items, bins, onCreateBin, onDeleteBin, onRemove, onUpdate, onDeduplicate }) {
   const [newBin, setNewBin] = useState('');
   const [msg, setMsg] = useState(null);
 
@@ -8760,6 +8762,13 @@ function BinsTab({ items, bins, onCreateBin, onDeleteBin, onRemove, onUpdate }) 
           <input value={newBin} onChange={e=>setNewBin(e.target.value)} placeholder="Bin name (e.g. OR-1, A2, SHELF-3)" style={{flex:1}}/>
           <button type="submit" className="btn btn-primary" style={{width:'auto',padding:'11px 20px'}}>＋ Create</button>
         </form>
+        {onDeduplicate && (
+          <button
+            className="btn btn-secondary btn-sm"
+            style={{marginTop:10,width:'auto'}}
+            onClick={()=>onDeduplicate(setMsg)}
+          >🔁 Merge Duplicate Implants</button>
+        )}
         {msg && <div className="alert alert-green" style={{marginTop:10}}>{msg}</div>}
       </div>
 
@@ -8934,6 +8943,27 @@ function App() {
   function createBin(name) { setData(d=>({...d,bins:[...d.bins.filter(b=>b!==name),name].sort()})); }
   function deleteBin(name) { setData(d=>({...d,bins:d.bins.filter(b=>b!==name)})); }
   function startScan(bin) { setScanBinActive(bin); setScanning(true); }
+
+  async function handleDeduplicate(setMsg) {
+    const inventory = data.inventory || [];
+    const deduped   = deduplicateInventory(inventory);
+    const merged    = inventory.length - deduped.length;
+    setData(d => ({...d, inventory: deduped}));
+    if (merged > 0) {
+      setMsg(`✅ Merged ${merged} duplicate entr${merged===1?'y':'ies'} — saving...`);
+      try {
+        let t = token;
+        try { const fresh = await getToken(); if (fresh) t=fresh; } catch{}
+        const cleanData = {...data, inventory: deduped};
+        await writeOneDrive(t, cleanData);
+        await writeOneDriveExcel(t, deduped, data.bins||[]);
+        setMsg(`✅ Merged ${merged} duplicate entr${merged===1?'y':'ies'} & saved to Excel`);
+      } catch(e) { setMsg('⚠️ Merged locally but save failed: '+e.message); }
+    } else {
+      setMsg('✅ No duplicates found — inventory is clean');
+    }
+    setTimeout(()=>setMsg(null), 4000);
+  }
   function stopScan() { setScanning(false); setActiveTab('add'); }
 
   if (!initialized) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',minHeight:'100vh',flexDirection:'column',gap:12}}><img src={LOGO_URI} style={{height:48,opacity:.7}}/><p style={{color:'#94a3b8'}}>Loading...</p></div>;
@@ -8966,7 +8996,7 @@ function App() {
       <div className="tabs">{tabs.map(t=><div key={t.id} className={`tab${activeTab===t.id?' active':''}`} onClick={()=>setActiveTab(t.id)}>{t.label}</div>)}</div>
       {activeTab==='add'&&<AddTab onAdd={addItem} bins={[...new Set([...(data.bins||[]),...(data.inventory||[]).map(i=>i.bin).filter(Boolean)])].sort()} onStartScan={startScan}/>}
       {activeTab==='inventory'&&<InventoryTab items={data.inventory||[]} onRemove={removeItem} onUpdate={updateItem}/>}
-      {activeTab==='bins'&&<BinsTab items={data.inventory||[]} bins={data.bins||[]} onCreateBin={createBin} onDeleteBin={deleteBin} onRemove={removeItem} onUpdate={updateItem}/>}
+      {activeTab==='bins'&&<BinsTab items={data.inventory||[]} bins={data.bins||[]} onCreateBin={createBin} onDeleteBin={deleteBin} onRemove={removeItem} onUpdate={updateItem} onDeduplicate={handleDeduplicate}/>}
       {activeTab==='alerts'&&<AlertsTab items={data.inventory||[]}/>}
     </div>
   );
