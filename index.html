@@ -12,6 +12,7 @@
   <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
   <script src="https://unpkg.com/@zxing/library@0.19.1/umd/index.min.js"></script>
   <style>
     *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
@@ -77,7 +78,8 @@ const { useState, useEffect, useRef } = React;
 // ── Config ───────────────────────────────────────────────────────────────────
 const CLIENT_ID = "e8c819c1-8ce0-4abd-a175-a70bf3474c57";
 const GRAPH = "https://graph.microsoft.com/v1.0";
-const FILE_PATH = "OsteoSolutions/inventory.json";
+const FILE_PATH  = "OsteoSolutions/inventory.json";
+const EXCEL_PATH = "OsteoSolutions/inventory.xlsx";
 const SCOPES = ["Files.ReadWrite", "User.Read", "offline_access"];
 const LOGO_URI = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzMjAgODAiIHdpZHRoPSIzMjAiIGhlaWdodD0iODAiPgogIDwhLS0gQmxhY2sgY2lyY2xlIC0tPgogIDxjaXJjbGUgY3g9IjQwIiBjeT0iNDAiIHI9IjM4IiBmaWxsPSIjMDAwIi8+CiAgPCEtLSBCb25lIDE6IHRvcC1sZWZ0IHRvIGJvdHRvbS1yaWdodCAtLT4KICA8IS0tIEJvbmUga25vYiB0b3AtbGVmdCAtLT4KICA8Y2lyY2xlIGN4PSIxOCIgY3k9IjE4IiByPSI2IiBmaWxsPSIjZmZmIi8+CiAgPGNpcmNsZSBjeD0iMjQiIGN5PSIxNCIgcj0iNSIgZmlsbD0iI2ZmZiIvPgogIDwhLS0gQm9uZSBzaGFmdCAtLT4KICA8cmVjdCB4PSIxOSIgeT0iMTYiIHdpZHRoPSI0MiIgaGVpZ2h0PSIxMCIgcng9IjUiIGZpbGw9IiNmZmYiIHRyYW5zZm9ybT0icm90YXRlKDQ1IDQwIDQwKSIvPgogIDwhLS0gQm9uZSBrbm9iIGJvdHRvbS1yaWdodCAtLT4KICA8Y2lyY2xlIGN4PSI2MiIgY3k9IjYyIiByPSI2IiBmaWxsPSIjZmZmIi8+CiAgPGNpcmNsZSBjeD0iNTYiIGN5PSI2NiIgcj0iNSIgZmlsbD0iI2ZmZiIvPgogIDwhLS0gVGhpbiByb2Q6IHRvcC1yaWdodCB0byBib3R0b20tbGVmdCAobWVkaWNhbCBwaW4vaW1wbGFudCkgLS0+CiAgPGxpbmUgeDE9IjYzIiB5MT0iMTciIHgyPSIxNyIgeTI9IjYzIiBzdHJva2U9IiNmZmYiIHN0cm9rZS13aWR0aD0iNSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIi8+CiAgPCEtLSBCb25lIDI6IHRvcC1yaWdodCB0byBib3R0b20tbGVmdCAtLT4KICA8Y2lyY2xlIGN4PSI2MiIgY3k9IjE4IiByPSI2IiBmaWxsPSIjZmZmIi8+CiAgPGNpcmNsZSBjeD0iNTYiIGN5PSIxNCIgcj0iNSIgZmlsbD0iI2ZmZiIvPgogIDxjaXJjbGUgY3g9IjE4IiBjeT0iNjIiIHI9IjYiIGZpbGw9IiNmZmYiLz4KICA8Y2lyY2xlIGN4PSIyNCIgY3k9IjY2IiByPSI1IiBmaWxsPSIjZmZmIi8+CiAgPCEtLSBUZXh0IC0tPgogIDx0ZXh0IHg9IjkwIiB5PSI0OCIgZm9udC1mYW1pbHk9Ii1hcHBsZS1zeXN0ZW0sIEJsaW5rTWFjU3lzdGVtRm9udCwgJ0hlbHZldGljYSBOZXVlJywgc2Fucy1zZXJpZiIgZm9udC1zaXplPSIyOCIgZm9udC13ZWlnaHQ9IjQwMCIgZmlsbD0iIzAwMCIgbGV0dGVyLXNwYWNpbmc9Ii0wLjUiPk9zdGVvU29sdXRpb25zPC90ZXh0Pgo8L3N2Zz4=";
 
@@ -138,6 +140,62 @@ async function writeOneDrive(token, data) {
     body: JSON.stringify(data, null, 2)
   });
   if (!r.ok) throw new Error(`OneDrive write error ${r.status}`);
+}
+
+async function readOneDriveExcel(token) {
+  const r = await fetch(`${GRAPH}/me/drive/root:/${EXCEL_PATH}:/content`, {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  if (r.status === 404) return null;
+  if (!r.ok) throw new Error(`Excel read error ${r.status}`);
+  const ab = await r.arrayBuffer();
+  return XLSX.read(new Uint8Array(ab), { type: 'array' });
+}
+
+async function writeOneDriveExcel(token, inventory, bins) {
+  const wb = XLSX.utils.book_new();
+  const allBins = [...new Set([...(bins||[]), ...inventory.map(i=>i.bin).filter(Boolean)])].sort();
+  const toRow = (i, includeBin) => ({
+    ID: String(i.id), REF: i.productNumber||'',
+    'Item Description': i.productName||'', LOT: i.lot||'',
+    Expiry: i.expDate||'', ...(includeBin?{Bin:i.bin||''}:{}),
+    Qty: i.qty||1, 'Added Date': i.addedAt?i.addedAt.slice(0,10):''
+  });
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(inventory.map(i=>toRow(i,true))), 'All Items');
+  for (const bin of allBins) {
+    const rows = inventory.filter(i=>(i.bin||'')===bin).map(i=>toRow(i,false));
+    const name = bin.replace(/[\/?\*\[\]:|]/g,'').slice(0,31)||'Bin';
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), name);
+  }
+  const buf = XLSX.write(wb, { bookType:'xlsx', type:'array' });
+  const r = await fetch(`${GRAPH}/me/drive/root:/${EXCEL_PATH}:/content`, {
+    method:'PUT',
+    headers:{ Authorization:`Bearer ${token}`, 'Content-Type':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' },
+    body: new Uint8Array(buf)
+  });
+  if (!r.ok) throw new Error(`Excel write error ${r.status}`);
+}
+
+function importFromExcel(wb, existingInventory) {
+  const existingIds = new Set(existingInventory.map(i=>String(i.id)));
+  const added = [];
+  for (const name of wb.SheetNames) {
+    if (name === 'All Items') continue;
+    const rows = XLSX.utils.sheet_to_json(wb.Sheets[name]);
+    for (const row of rows) {
+      if (!row.REF) continue;
+      const id = row.ID ? String(row.ID) : null;
+      if (id && existingIds.has(id)) continue;
+      added.push({
+        id: id ? Number(id) : (Date.now() + Math.random()),
+        productNumber: String(row.REF||''), productName: String(row['Item Description']||''),
+        lot: String(row.LOT||''), expDate: row.Expiry?String(row.Expiry).slice(0,10):null,
+        bin: String(row.Bin||name), qty: Number(row.Qty)||1,
+        addedAt: row['Added Date']?String(row['Added Date']):new Date().toISOString()
+      });
+    }
+  }
+  return added;
 }
 
 // ── Built-in GTIN→REF map (Enovis GTIN List) ─
@@ -8078,20 +8136,23 @@ function BinSelector({ value, onChange, bins, customValue, onCustomChange }) {
 
 // ── Barcode Scanner — ZXing (works on iOS Safari, Android, all browsers) ──────
 function BarcodeScanner({ bin, onAdd, onClose, gtinMap, onSaveGtinMapping }) {
-  const videoRef   = useRef(null);
-  const readerRef  = useRef(null);
-  const controlRef = useRef(null);
-  const cooldown   = useRef(false);
-  const lastCode   = useRef('');
-  const [scanned,     setScanned]     = useState([]);
-  const [pending,     setPending]     = useState(null);   // item awaiting confirmation
-  const [pendingRef,  setPendingRef]  = useState('');
-  const [pendingLot,  setPendingLot]  = useState('');
-  const [pendingExp,  setPendingExp]  = useState('');
-  const [rawScan,     setRawScan]     = useState('');    // debug: raw barcode string
-  const [camError,    setCamError]    = useState('');
-  const [ready,       setReady]       = useState(false);
-  const [addedFlash,  setAddedFlash]  = useState(false);
+  const videoRef        = useRef(null);
+  const canvasRef       = useRef(null);      // hidden canvas for viewfinder crop
+  const readerRef       = useRef(null);
+  const streamRef       = useRef(null);      // camera MediaStream
+  const animFrameRef    = useRef(null);
+  const cooldown        = useRef(false);
+  const lastCode        = useRef('');
+  const lastConfirmed   = useRef({productNumber:'', lot:''});  // consecutive-dup check
+  const [scanned,       setScanned]     = useState([]);
+  const [pending,       setPending]     = useState(null);
+  const [pendingRef,    setPendingRef]  = useState('');
+  const [pendingLot,    setPendingLot]  = useState('');
+  const [pendingExp,    setPendingExp]  = useState('');
+  const [isDupScan,     setIsDupScan]   = useState(false);   // consecutive duplicate flag
+  const [camError,      setCamError]    = useState('');
+  const [ready,         setReady]       = useState(false);
+  const [addedFlash,    setAddedFlash]  = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -8100,59 +8161,79 @@ function BarcodeScanner({ bin, onAdd, onClose, gtinMap, onSaveGtinMapping }) {
       try {
         const hints = new Map();
         const fmts = ZXing && ZXing.BarcodeFormat ? [
-          ZXing.BarcodeFormat.CODE_128,
-          ZXing.BarcodeFormat.CODE_39,
-          ZXing.BarcodeFormat.EAN_13,
-          ZXing.BarcodeFormat.EAN_8,
-          ZXing.BarcodeFormat.UPC_A,
-          ZXing.BarcodeFormat.UPC_E,
-          ZXing.BarcodeFormat.QR_CODE,
-          ZXing.BarcodeFormat.DATA_MATRIX,
+          ZXing.BarcodeFormat.CODE_128, ZXing.BarcodeFormat.CODE_39,
+          ZXing.BarcodeFormat.EAN_13,   ZXing.BarcodeFormat.EAN_8,
+          ZXing.BarcodeFormat.UPC_A,    ZXing.BarcodeFormat.UPC_E,
+          ZXing.BarcodeFormat.QR_CODE,  ZXing.BarcodeFormat.DATA_MATRIX,
         ] : [];
         if (fmts.length) hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, fmts);
         if (ZXing && ZXing.DecodeHintType) hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
-
         const reader = new ZXing.BrowserMultiFormatReader(hints);
         readerRef.current = reader;
-        if (!active) return;
 
-        const controls = await reader.decodeFromConstraints(
-          { video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } } },
-          videoRef.current,
-          (result, err) => {
-            if (!active || !result) return;
-            const raw = result.getText();
-            if (!raw || raw === lastCode.current || cooldown.current) return;
-
-            lastCode.current = raw;
-            cooldown.current = true;
-            // Keep cooldown active while review card is shown; reset when dismissed
-            try { navigator.vibrate && navigator.vibrate([100]); } catch(_) {}
-
-            setRawScan(raw);  // debug
-            const p = parseBarcode(raw);
-            const looked = lookupProduct(p.gtin14, gtinMap);
-            const resolvedRef = looked.productNumber;   // '' if unknown GTIN
-            const item = {
-              id: Date.now() + Math.random(),
-              _gtin14: p.gtin14,                        // keep for mapping save
-              productNumber: resolvedRef || p.gtin14 || raw.trim(),
-              productName: looked.productName || '',
-              lot: p.lotNumber,
-              expDate: p.expDate || null,
-              bin: bin || '',
-              qty: 1,
-              addedAt: new Date().toISOString()
-            };
-            // Show review card — don't add yet
-            setPending(item);
-            setPendingRef(resolvedRef);  // blank when GTIN is new, user must type
-            setPendingLot(item.lot || '');
-            setPendingExp(item.expDate || '');
-          }
-        );
-        controlRef.current = controls;
+        // Start camera stream manually so we can crop before decoding
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } }
+        });
+        if (!active) { stream.getTracks().forEach(t=>t.stop()); return; }
+        streamRef.current = stream;
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play();
         if (active) setReady(true);
+
+        // ── Canvas decode loop — only reads the viewfinder box region ──
+        const canvas = canvasRef.current;
+        const ctx = canvas.getContext('2d');
+        const decode = () => {
+          if (!active) return;
+          const vid = videoRef.current;
+          const vw = vid ? vid.videoWidth : 0;
+          const vh = vid ? vid.videoHeight : 0;
+          if (vw && vh && !cooldown.current) {
+            // Crop to 88% width × 32% height centred on video (matches white box)
+            const cropW = Math.round(vw * 0.88);
+            const cropH = Math.round(vh * 0.32);
+            const sx = Math.round((vw - cropW) / 2);
+            const sy = Math.round((vh - cropH) / 2);
+            canvas.width = cropW; canvas.height = cropH;
+            ctx.drawImage(vid, sx, sy, cropW, cropH, 0, 0, cropW, cropH);
+            try {
+              const result = reader.decodeFromCanvas(canvas);
+              if (result) {
+                const raw = result.getText();
+                if (raw && raw !== lastCode.current && !cooldown.current) {
+                  lastCode.current = raw;
+                  cooldown.current = true;
+                  try { navigator.vibrate && navigator.vibrate([100]); } catch(_) {}
+                  const p = parseBarcode(raw);
+                  const looked = lookupProduct(p.gtin14, gtinMap);
+                  const resolvedRef = looked.productNumber;
+                  const item = {
+                    id: Date.now() + Math.random(),
+                    _gtin14: p.gtin14,
+                    productNumber: resolvedRef || p.gtin14 || raw.trim(),
+                    productName: looked.productName || '',
+                    lot: p.lotNumber,
+                    expDate: p.expDate || null,
+                    bin: bin || '',
+                    qty: 1,
+                    addedAt: new Date().toISOString()
+                  };
+                  // Check for consecutive duplicate scan
+                  const lc = lastConfirmed.current;
+                  const isDup = lc.productNumber && lc.productNumber === (resolvedRef||p.gtin14||raw.trim()) && lc.lot === (p.lotNumber||'');
+                  setPending(item);
+                  setPendingRef(resolvedRef);
+                  setPendingLot(item.lot || '');
+                  setPendingExp(item.expDate || '');
+                  setIsDupScan(!!isDup);
+                }
+              }
+            } catch(_) { /* NotFoundException — no barcode in frame */ }
+          }
+          animFrameRef.current = requestAnimationFrame(decode);
+        };
+        animFrameRef.current = requestAnimationFrame(decode);
 
       } catch (err) {
         if (!active) return;
@@ -8166,7 +8247,8 @@ function BarcodeScanner({ bin, onAdd, onClose, gtinMap, onSaveGtinMapping }) {
 
     return () => {
       active = false;
-      try { if (controlRef.current) controlRef.current.stop(); } catch(_) {}
+      cancelAnimationFrame(animFrameRef.current);
+      if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
       try { if (readerRef.current) readerRef.current.reset(); } catch(_) {}
     };
   }, []);
@@ -8174,7 +8256,6 @@ function BarcodeScanner({ bin, onAdd, onClose, gtinMap, onSaveGtinMapping }) {
   function confirmAdd() {
     if (!pending) return;
     const finalRef = pendingRef.trim();
-    // If user typed a REF and this GTIN was previously unknown, save the mapping
     if (finalRef && pending._gtin14 && onSaveGtinMapping) {
       const wasUnknown = !lookupProduct(pending._gtin14, gtinMap).productNumber;
       if (wasUnknown) onSaveGtinMapping(pending._gtin14, finalRef);
@@ -8187,9 +8268,10 @@ function BarcodeScanner({ bin, onAdd, onClose, gtinMap, onSaveGtinMapping }) {
       expDate: pendingExp || pending.expDate,
     };
     delete confirmed._gtin14;
+    lastConfirmed.current = { productNumber: confirmed.productNumber, lot: confirmed.lot||'' };
     onAdd(confirmed);
     setScanned(prev => [confirmed, ...prev.slice(0, 49)]);
-    setPending(null);
+    setPending(null); setIsDupScan(false);
     setPendingRef(''); setPendingLot(''); setPendingExp('');
     cooldown.current = false; lastCode.current = '';
     setAddedFlash(true);
@@ -8197,13 +8279,14 @@ function BarcodeScanner({ bin, onAdd, onClose, gtinMap, onSaveGtinMapping }) {
   }
 
   function dismissPending() {
-    setPending(null);
+    setPending(null); setIsDupScan(false);
     setPendingRef(''); setPendingLot(''); setPendingExp('');
     cooldown.current = false; lastCode.current = '';
   }
 
   const handleDone = () => {
-    try { if (controlRef.current) controlRef.current.stop(); } catch(_) {}
+    cancelAnimationFrame(animFrameRef.current);
+    if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
     try { if (readerRef.current) readerRef.current.reset(); } catch(_) {}
     onClose();
   };
@@ -8224,6 +8307,8 @@ function BarcodeScanner({ bin, onAdd, onClose, gtinMap, onSaveGtinMapping }) {
         {/* Camera */}
         <div style={{borderRadius:14,overflow:'hidden',background:'#111',position:'relative',minHeight:200}}>
           <video ref={videoRef} playsInline muted style={{width:'100%',display:'block',maxHeight:340,objectFit:'cover'}}/>
+          {/* Hidden canvas used to crop video to viewfinder region before decoding */}
+          <canvas ref={canvasRef} style={{display:'none'}}/>
           {ready && !camError && (
             <div style={{position:'absolute',inset:0,display:'flex',alignItems:'center',justifyContent:'center',pointerEvents:'none'}}>
               <div style={{
@@ -8246,8 +8331,20 @@ function BarcodeScanner({ bin, onAdd, onClose, gtinMap, onSaveGtinMapping }) {
         {/* ── Review card: shown after scan, before confirm ── */}
         {pending && (() => {
           const isNewProduct = !pendingRef;
+          const borderColor = isDupScan ? '#f59e0b' : isNewProduct ? '#f59e0b' : '#22c55e';
           return (
-          <div style={{background:'#1e3a5f',borderRadius:14,padding:16,animation:'flashIn .2s ease-out',border:`2px solid ${isNewProduct ? '#f59e0b' : '#22c55e'}`}}>
+          <div style={{background:'#1e3a5f',borderRadius:14,padding:16,animation:'flashIn .2s ease-out',border:`2px solid ${borderColor}`}}>
+
+            {/* Consecutive duplicate warning */}
+            {isDupScan && (
+              <div style={{background:'#7c2d12',borderRadius:8,padding:'8px 12px',marginBottom:12,display:'flex',gap:8,alignItems:'flex-start'}}>
+                <span style={{fontSize:16}}>&#x26A0;&#xFE0F;</span>
+                <div>
+                  <div style={{color:'#fbbf24',fontSize:12,fontWeight:800}}>DUPLICATE SCAN</div>
+                  <div style={{color:'#fde68a',fontSize:11,marginTop:2}}>This is the same implant you just added. Add another unit anyway?</div>
+                </div>
+              </div>
+            )}
 
             {/* Header */}
             {isNewProduct ? (
@@ -8716,8 +8813,18 @@ function App() {
     setSyncStatus('pending'); setSyncMsg('Loading from OneDrive...');
     try {
       const d = await readOneDrive(t);
-      if (d && d.inventory) setData({bins:[], gtinMap:{}, ...d});
-      else setData({ inventory: [], bins: [] });
+      let inventory = (d && d.inventory) ? d.inventory : [];
+      const bins    = (d && d.bins)      ? d.bins      : [];
+      const gtinMap = (d && d.gtinMap)   ? d.gtinMap   : {};
+      // Also read Excel — import any rows manually added there (identified by absent/unknown ID)
+      try {
+        const wb = await readOneDriveExcel(t);
+        if (wb) {
+          const newItems = importFromExcel(wb, inventory);
+          if (newItems.length > 0) inventory = [...newItems, ...inventory];
+        }
+      } catch(excelErr) { console.warn('Excel import skipped:', excelErr); }
+      setData({ inventory, bins, gtinMap });
       setSyncStatus('ok'); setSyncMsg('Synced with OneDrive ✓');
     } catch(e) {
       setSyncStatus('error'); setSyncMsg('Load failed: '+e.message);
@@ -8733,6 +8840,8 @@ function App() {
         let t = token;
         try { const fresh = await getToken(); if (fresh) t=fresh; } catch{}
         await writeOneDrive(t, data);
+        // Also write Excel — each bin gets its own sheet
+        try { await writeOneDriveExcel(t, data.inventory||[], data.bins||[]); } catch(exErr) { console.warn('Excel write skipped:', exErr); }
         setSyncStatus('ok'); setSyncMsg('Saved to OneDrive ✓');
       } catch(e) { setSyncStatus('error'); setSyncMsg('Save failed: '+e.message); }
     }, 1000);
@@ -8756,8 +8865,24 @@ function App() {
   const [scanning, setScanning] = useState(false);
   const [scanBinActive, setScanBinActive] = useState('');
 
-  function addItem(item) { setData(d=>({...d,inventory:[item,...d.inventory]})); setActiveTab('bins'); }
-  function addItemFromScan(item) { setData(d=>({...d,inventory:[item,...d.inventory]})); } // no tab switch
+  function mergeOrAdd(item, switchTab) {
+    setData(d => {
+      const dup = d.inventory.find(i =>
+        (i.bin||'') === (item.bin||'') &&
+        i.productNumber === item.productNumber &&
+        (i.lot||'') === (item.lot||'')
+      );
+      if (dup) {
+        return {...d, inventory: d.inventory.map(i =>
+          i.id === dup.id ? {...i, qty: (i.qty||1) + (item.qty||1)} : i
+        )};
+      }
+      return {...d, inventory: [item, ...d.inventory]};
+    });
+    if (switchTab) setActiveTab('bins');
+  }
+  function addItem(item) { mergeOrAdd(item, true); }
+  function addItemFromScan(item) { mergeOrAdd(item, false); }
   function removeItem(id) { setData(d=>({...d,inventory:d.inventory.filter(i=>i.id!==id)})); }
   function saveGtinMapping(gtin14, ref) {
     if (!gtin14 || !ref) return;
