@@ -8816,12 +8816,16 @@ function App() {
       let inventory = (d && d.inventory) ? d.inventory : [];
       const bins    = (d && d.bins)      ? d.bins      : [];
       const gtinMap = (d && d.gtinMap)   ? d.gtinMap   : {};
-      // Also read Excel — import any rows manually added there (identified by absent/unknown ID)
+      // Also read Excel — import new rows, or create file if it doesn't exist yet
       try {
         const wb = await readOneDriveExcel(t);
         if (wb) {
           const newItems = importFromExcel(wb, inventory);
           if (newItems.length > 0) inventory = [...newItems, ...inventory];
+        } else {
+          // Excel file doesn't exist yet — create it now
+          setSyncMsg('Creating Excel file on OneDrive...');
+          try { await writeOneDriveExcel(t, inventory, bins); } catch(createErr) { console.warn('Excel create failed:', createErr); }
         }
       } catch(excelErr) { console.warn('Excel import skipped:', excelErr); }
       setData({ inventory, bins, gtinMap });
@@ -8859,6 +8863,16 @@ function App() {
   async function handleSignOut() {
     if (!confirm('Sign out?')) return;
     await signOut(); setToken(null); setData({inventory:[]}); didInit.current=false;
+  }
+
+  async function syncExcelNow() {
+    setSyncStatus('pending'); setSyncMsg('Exporting to Excel...');
+    try {
+      let t = token;
+      try { const fresh = await getToken(); if (fresh) t=fresh; } catch{}
+      await writeOneDriveExcel(t, data.inventory||[], data.bins||[]);
+      setSyncStatus('ok'); setSyncMsg('Excel updated ✓');
+    } catch(e) { setSyncStatus('error'); setSyncMsg('Excel sync failed: '+e.message); }
   }
 
   // Scanner lives at App level so it survives tab switches
@@ -8917,6 +8931,7 @@ function App() {
             <div className={`sync-dot ${syncStatus}`}></div>
             <span style={{color:'#6b7280'}}>{syncMsg||'OneDrive'}</span>
           </div>
+          <button className="btn btn-secondary btn-sm" onClick={syncExcelNow} title="Export inventory to Excel on OneDrive">📊 Sync Excel</button>
           <button className="btn btn-secondary btn-sm" onClick={handleSignOut}>Sign Out</button>
         </div>
       </div>
