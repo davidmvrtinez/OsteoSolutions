@@ -9027,7 +9027,7 @@ function App() {
       {scanning && <BarcodeScanner bin={scanBinActive} onAdd={addItemFromScan} onClose={stopScan} gtinMap={data.gtinMap||{}} onSaveGtinMapping={saveGtinMapping}/>}
 
       <div className="header">
-        <img src={LOGO_URI} alt="OsteoSolutions" style={{height:50,width:'auto'}}/>
+        <img src={LOGO_URI} alt="OsteoSolutions" style={{height:80,width:'auto'}}/>
         <div style={{display:'flex',alignItems:'center',gap:10}}>
           <div className="sync-bar" style={{marginBottom:0,boxShadow:'none',background:'transparent',padding:'0',fontSize:12}}>
             <div className={`sync-dot ${syncStatus}`}></div>
