@@ -73,6 +73,7 @@
 <body>
 <div id="root"></div>
 <script type="text/babel">
+window.onerror = function(msg, src, line, col, err) { console.error('[GLOBAL ERROR]', msg, 'line:', line, err); };
 const { useState, useEffect, useRef } = React;
 
 // ── Config ───────────────────────────────────────────────────────────────────
@@ -8176,6 +8177,7 @@ function BarcodeScanner({ bin, mode, onAdd, onRemove, onClose, gtinMap, onSaveGt
 
   useEffect(() => {
     let active = true;
+    console.log('[Scanner] Initializing... ZXing available:', typeof ZXing !== 'undefined');
 
     (async () => {
       try {
@@ -8199,7 +8201,7 @@ function BarcodeScanner({ bin, mode, onAdd, onRemove, onClose, gtinMap, onSaveGt
         streamRef.current = stream;
         videoRef.current.srcObject = stream;
         await videoRef.current.play();
-        if (active) setReady(true);
+        if (active) { setReady(true); console.log('[Scanner] Camera ready, starting decode loop'); }
 
         // ── Canvas decode loop — only reads the viewfinder box region ──
         const canvas = canvasRef.current;
@@ -8221,13 +8223,16 @@ function BarcodeScanner({ bin, mode, onAdd, onRemove, onClose, gtinMap, onSaveGt
               const result = reader.decodeFromCanvas(canvas);
               if (result) {
                 const raw = result.getText();
+                console.log('[Scanner] Barcode detected:', raw);
                 if (raw && raw !== lastCode.current && !cooldown.current) {
                   lastCode.current = raw;
                   cooldown.current = true;
                   try { navigator.vibrate && navigator.vibrate([100]); } catch(_) {}
                   const p = parseBarcode(raw);
+                  console.log('[Scanner] Parsed:', JSON.stringify(p));
                   const looked = lookupProduct(p.gtin14, gtinMap);
                   const resolvedRef = looked.productNumber;
+                  console.log('[Scanner] Resolved REF:', resolvedRef, 'Name:', looked.productName);
                   const item = {
                     id: Date.now() + Math.random(),
                     _gtin14: p.gtin14,
@@ -8257,6 +8262,7 @@ function BarcodeScanner({ bin, mode, onAdd, onRemove, onClose, gtinMap, onSaveGt
         animFrameRef.current = requestAnimationFrame(decode);
 
       } catch (err) {
+        console.error('[Scanner] Init error:', err);
         if (!active) return;
         if (err && (err.name === 'NotAllowedError' || String(err).includes('Permission'))) {
           setCamError('Camera permission denied.\n\niPhone: Settings \u2192 Safari \u2192 Camera \u2192 Allow\n\nThen reopen the scanner.');
@@ -8276,6 +8282,7 @@ function BarcodeScanner({ bin, mode, onAdd, onRemove, onClose, gtinMap, onSaveGt
 
   function confirmAdd() {
     if (!pending) return;
+    console.log('[Scanner] confirmAdd called, mode:', mode);
     const finalRef = pendingRef.trim();
     if (finalRef && pending._gtin14 && onSaveGtinMapping) {
       const wasUnknown = !lookupProduct(pending._gtin14, gtinMap).productNumber;
@@ -8977,8 +8984,9 @@ function App() {
     if (switchTab) setActiveTab('bins');
   }
   function addItem(item) { mergeOrAdd(item, true); }
-  function addItemFromScan(item) { mergeOrAdd(item, false); }
+  function addItemFromScan(item) { console.log('[App] addItemFromScan:', item.productNumber, item.lot); mergeOrAdd(item, false); }
   function removeItemByScan(item) {
+    console.log('[App] removeItemByScan:', item.productNumber, item.lot, 'bin:', item.bin);
     setData(d => {
       const norm = v => (v == null ? '' : String(v).trim());
       const idx = d.inventory.findIndex(i =>
@@ -9029,7 +9037,7 @@ function App() {
       return updated;
     });
   }
-  function startScan(bin, mode) { setScanBinActive(bin); setScanMode(mode || 'add'); setScanning(true); }
+  function startScan(bin, mode) { console.log('[App] startScan bin:', bin, 'mode:', mode); setScanBinActive(bin); setScanMode(mode || 'add'); setScanning(true); }
 
   async function handleDeduplicate(setMsg) {
     const inventory = data.inventory || [];
