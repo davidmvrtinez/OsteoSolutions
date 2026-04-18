@@ -14,6 +14,7 @@
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
   <script src="https://unpkg.com/@zxing/library@0.19.1/umd/index.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
   <style>
     *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
     body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f0f4f8;color:#1a202c;min-height:100vh}
@@ -8834,10 +8835,441 @@ function AlertsTab({ items }) {
   </div>);
 }
 
+// ── Bin QR Code renderer ──────────────────────────────────────────────────────
+function BinQRCode({ text, size }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!ref.current || typeof QRCode === 'undefined') return;
+    ref.current.innerHTML = '';
+    new QRCode(ref.current, {
+      text: text,
+      width: size || 150,
+      height: size || 150,
+      colorDark: '#0f172a',
+      colorLight: '#ffffff',
+      correctLevel: QRCode.CorrectLevel.M
+    });
+  }, [text, size]);
+  return <div ref={ref} style={{lineHeight:0, display:'inline-block'}}/>;
+}
+
+// ── Single bin label card ─────────────────────────────────────────────────────
+function BinLabelCard({ bin, location, onSaveLocation, itemCount }) {
+  const wrapRef = useRef(null);
+  const [loc, setLoc] = useState(location || '');
+  const [saved, setSaved] = useState(false);
+
+  // Sync if parent location changes
+  useEffect(() => { setLoc(location || ''); }, [location]);
+
+  const save = () => {
+    onSaveLocation(loc);
+    setSaved(true);
+    setTimeout(() => setSaved(false), 1600);
+  };
+
+  const download = () => {
+    const canvas = wrapRef.current && wrapRef.current.querySelector('canvas');
+    if (!canvas) { alert('QR not ready — wait a moment and try again.'); return; }
+    // Pad with bin name below
+    const pad = 48;
+    const out = document.createElement('canvas');
+    out.width = canvas.width + 20;
+    out.height = canvas.height + pad + 20;
+    const ctx = out.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, out.width, out.height);
+    ctx.drawImage(canvas, 10, 10);
+    ctx.fillStyle = '#0f172a';
+    ctx.font = 'bold 13px system-ui,sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(bin, out.width / 2, canvas.height + 26);
+    if (loc) { ctx.font = '11px system-ui,sans-serif'; ctx.fillStyle = '#64748b'; ctx.fillText(loc, out.width / 2, canvas.height + 42); }
+    const link = document.createElement('a');
+    link.download = `bin-${bin.replace(/[^a-z0-9]/gi, '_')}.png`;
+    link.href = out.toDataURL('image/png');
+    link.click();
+  };
+
+  return (
+    <div className="card" style={{display:'flex',flexDirection:'column',alignItems:'center',gap:10,padding:16,textAlign:'center'}}>
+      <div style={{fontSize:15,fontWeight:800,color:'#f1f5f9',letterSpacing:.3}}>{bin}</div>
+      <div ref={wrapRef} style={{background:'#fff',borderRadius:8,padding:6,display:'inline-block'}}>
+        <BinQRCode text={`OSTEO-BIN:${bin}`} size={140}/>
+      </div>
+      <div style={{fontSize:10,color:'#475569',fontFamily:'monospace',letterSpacing:.3}}>OSTEO-BIN:{bin}</div>
+      <div style={{fontSize:12,color:'#64748b'}}>{itemCount} item{itemCount !== 1 ? 's' : ''}</div>
+      <div style={{width:'100%',display:'flex',gap:6}}>
+        <input
+          value={loc}
+          onChange={e => setLoc(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && save()}
+          placeholder="Location (e.g. OR Rack A)"
+          style={{flex:1,background:'#0f2744',border:'1.5px solid #334155',borderRadius:8,padding:'8px 10px',color:'#f1f5f9',fontSize:13,minWidth:0}}
+        />
+        <button onClick={save} style={{background:saved?'#16a34a':'#1e40af',color:'#fff',border:'none',borderRadius:8,padding:'8px 14px',fontWeight:700,cursor:'pointer',fontSize:12,flexShrink:0,transition:'background .2s'}}>
+          {saved ? '✓' : 'Save'}
+        </button>
+      </div>
+      <button onClick={download} style={{width:'100%',background:'#0f2744',color:'#86efac',border:'1.5px solid #22c55e',borderRadius:8,padding:'9px',fontWeight:700,cursor:'pointer',fontSize:13}}>
+        ⬇ Download Label
+      </button>
+    </div>
+  );
+}
+
+// ── Haversine distance in metres between two GPS coords ───────────────────────
+function haversineM(lat1, lng1, lat2, lng2) {
+  const R = 6371000, r = Math.PI / 180;
+  const dLat = (lat2 - lat1) * r, dLng = (lng2 - lng1) * r;
+  const a = Math.sin(dLat/2)**2 + Math.cos(lat1*r)*Math.cos(lat2*r)*Math.sin(dLng/2)**2;
+  return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+
+// ── Reverse-geocode lat/lng → human address via Nominatim (free, no key) ─────
+async function reverseGeocode(lat, lng) {
+  try {
+    const r = await fetch(
+      `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json&addressdetails=1`,
+      { headers: { 'Accept-Language': 'en-US,en' } }
+    );
+    const j = await r.json();
+    const a = j.address || {};
+    const street = a.house_number && a.road ? `${a.house_number} ${a.road}` : (a.road || '');
+    const city   = a.city || a.town || a.village || a.county || '';
+    const state  = a.state || '';
+    const zip    = a.postcode || '';
+    return [street, city, state, zip].filter(Boolean).join(', ') || j.display_name || `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+  } catch(_) {
+    return `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+  }
+}
+
+// ── Bin QR scanner panel — rapid multi-bin scanning with GPS location ─────────
+function BinQRScannerPanel({ inventory, binLocations, namedLocations, onSaveNamedLocation }) {
+  const videoRef    = useRef(null);
+  const readerRef   = useRef(null);
+  const streamRef   = useRef(null);
+  const cooldown    = useRef(false);
+  const scannedSet  = useRef(new Set()); // dedup: ignore bins already scanned this session
+
+  const [ready,          setReady]         = useState(false);
+  const [camError,       setCamError]      = useState('');
+  const [flash,          setFlash]         = useState(null);
+  const [log,            setLog]           = useState([]);
+  // GPS / location
+  const [gpsState,       setGpsState]      = useState('loading'); // loading|ok|denied|unavail
+  const [currentCoords,  setCurrentCoords] = useState(null);   // {lat, lng}
+  const [currentAddress, setCurrentAddress]= useState('');
+  const [matchedName,    setMatchedName]   = useState('');     // saved location name if within 200m
+  const [showNameInput,  setShowNameInput] = useState(false);
+  const [nameInput,      setNameInput]     = useState('');
+  const [nameSaved,      setNameSaved]     = useState(false);
+
+  // Get GPS on mount
+  useEffect(() => {
+    if (!navigator.geolocation) { setGpsState('unavail'); return; }
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        const lat = pos.coords.latitude, lng = pos.coords.longitude;
+        setCurrentCoords({ lat, lng });
+        // Check if within 200m of any saved named location
+        const match = (namedLocations || []).find(nl => haversineM(nl.lat, nl.lng, lat, lng) < 200);
+        if (match) {
+          setMatchedName(match.name);
+          setCurrentAddress(match.address || '');
+          setGpsState('ok');
+        } else {
+          const addr = await reverseGeocode(lat, lng);
+          setCurrentAddress(addr);
+          setGpsState('ok');
+        }
+      },
+      (err) => {
+        if (err.code === 1) setGpsState('denied');
+        else setGpsState('unavail');
+      },
+      { timeout: 8000, maximumAge: 60000 }
+    );
+  }, []);
+
+  const saveLocationName = () => {
+    if (!nameInput.trim() || !currentCoords) return;
+    onSaveNamedLocation({ name: nameInput.trim(), lat: currentCoords.lat, lng: currentCoords.lng, address: currentAddress });
+    setMatchedName(nameInput.trim());
+    setShowNameInput(false);
+    setNameInput('');
+    setNameSaved(true);
+    setTimeout(() => setNameSaved(false), 2000);
+  };
+
+  // Camera + ZXing
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      try {
+        const hints = new Map();
+        if (window.ZXing && ZXing.BarcodeFormat) {
+          hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
+            ZXing.BarcodeFormat.QR_CODE,
+            ZXing.BarcodeFormat.DATA_MATRIX,
+            ZXing.BarcodeFormat.CODE_128,
+          ]);
+        }
+        if (window.ZXing && ZXing.DecodeHintType) hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+        const reader = new ZXing.BrowserMultiFormatReader(hints);
+        readerRef.current = reader;
+        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } } });
+        if (!active) { stream.getTracks().forEach(t => t.stop()); return; }
+        streamRef.current = stream;
+        let first = true;
+        reader.decodeFromStream(stream, videoRef.current, (result) => {
+          if (!active) return;
+          if (first) { first = false; setReady(true); }
+          if (result && !cooldown.current) {
+            const raw = result.getText();
+            if (raw.startsWith('OSTEO-BIN:')) {
+              const binName = raw.slice(10).trim();
+              // Duplicate guard — ignore if already scanned this session
+              if (scannedSet.current.has(binName)) return;
+              scannedSet.current.add(binName);
+              cooldown.current = true;
+              try { navigator.vibrate && navigator.vibrate(80); } catch(_) {}
+              const cnt     = (inventory || []).filter(i => i.bin === binName).length;
+              const binLoc  = (binLocations || {})[binName] || '';
+              const entry   = { bin: binName, binLocation: binLoc, itemCount: cnt, ts: Date.now() };
+              setFlash(entry);
+              setLog(prev => [entry, ...prev.slice(0, 49)]);
+              setTimeout(() => { cooldown.current = false; setFlash(null); }, 1500);
+            }
+          }
+        });
+      } catch (err) {
+        if (!active) return;
+        if (err && err.name === 'NotAllowedError') {
+          setCamError('Camera permission denied.\n\niPhone: Settings → Safari → Camera → Allow');
+        } else {
+          setCamError('Camera error: ' + (err && err.message ? err.message : String(err)));
+        }
+      }
+    })();
+    return () => {
+      active = false;
+      if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
+      try { if (readerRef.current) readerRef.current.reset(); } catch(_) {}
+    };
+  }, []);
+
+  const displayLoc = matchedName || currentAddress;
+  const isNamed    = !!matchedName;
+
+  return (
+    <div style={{display:'flex',flexDirection:'column',gap:12}}>
+
+      {/* ── Location banner ── */}
+      <div style={{background:'#1e3a5f',borderRadius:12,padding:'12px 14px'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:8}}>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontSize:10,fontWeight:700,color:'#94a3b8',textTransform:'uppercase',letterSpacing:.8,marginBottom:4}}>
+              {gpsState==='loading' ? '📍 Detecting location…' : isNamed ? '📍 Location' : '📍 Current Address'}
+            </div>
+            {gpsState==='loading' && <div style={{fontSize:13,color:'#64748b',animation:'pulse .9s infinite alternate'}}>Getting GPS…</div>}
+            {gpsState==='ok' && (
+              <div style={{fontSize:14,fontWeight:isNamed?800:400,color:isNamed?'#86efac':'#f1f5f9',lineHeight:1.4,wordBreak:'break-word'}}>
+                {displayLoc || '—'}
+              </div>
+            )}
+            {/* If named, show the raw address underneath in muted text */}
+            {isNamed && currentAddress && (
+              <div style={{fontSize:11,color:'#475569',marginTop:3}}>{currentAddress}</div>
+            )}
+            {(gpsState==='denied'||gpsState==='unavail') && (
+              <div style={{fontSize:13,color:'#94a3b8'}}>
+                {gpsState==='denied' ? 'Location permission denied — allow in Settings → Safari → Location' : 'Location unavailable on this device'}
+              </div>
+            )}
+          </div>
+          {gpsState==='ok' && !isNamed && !showNameInput && (
+            <button onClick={() => setShowNameInput(true)} style={{background:'#0f2744',color:'#7dd3fc',border:'1.5px solid #334155',borderRadius:8,padding:'6px 12px',fontSize:12,fontWeight:700,cursor:'pointer',flexShrink:0,whiteSpace:'nowrap'}}>
+              ✏️ Name place
+            </button>
+          )}
+          {isNamed && (
+            <button onClick={() => { setMatchedName(''); setShowNameInput(true); setNameInput(matchedName); }} style={{background:'#0f2744',color:'#94a3b8',border:'1.5px solid #334155',borderRadius:8,padding:'6px 12px',fontSize:12,fontWeight:600,cursor:'pointer',flexShrink:0}}>
+              Edit
+            </button>
+          )}
+        </div>
+        {showNameInput && (
+          <div style={{display:'flex',gap:6,marginTop:10}}>
+            <input
+              value={nameInput}
+              onChange={e => setNameInput(e.target.value)}
+              onKeyDown={e => e.key==='Enter' && saveLocationName()}
+              placeholder="e.g. St. Mary's Hospital"
+              autoFocus
+              style={{flex:1,background:'#0f2744',border:'1.5px solid #7dd3fc',borderRadius:8,padding:'9px 10px',color:'#f1f5f9',fontSize:13,minWidth:0}}
+            />
+            <button onClick={saveLocationName} disabled={!nameInput.trim()} style={{background:nameInput.trim()?'#16a34a':'#334155',color:'#fff',border:'none',borderRadius:8,padding:'9px 14px',fontWeight:800,cursor:nameInput.trim()?'pointer':'not-allowed',fontSize:13,flexShrink:0}}>
+              Save
+            </button>
+            <button onClick={() => { setShowNameInput(false); setNameInput(''); }} style={{background:'none',border:'none',color:'#64748b',cursor:'pointer',fontSize:13,padding:'4px'}}>✕</button>
+          </div>
+        )}
+        {nameSaved && <div style={{color:'#86efac',fontSize:12,fontWeight:700,marginTop:6}}>✓ Location saved!</div>}
+      </div>
+
+      {/* ── Camera ── */}
+      <div style={{borderRadius:14,overflow:'hidden',background:'#111',position:'relative',minHeight:200}}>
+        <video ref={videoRef} playsInline muted style={{width:'100%',display:'block',maxHeight:300,objectFit:'cover'}}/>
+        {ready && !camError && (
+          <div style={{position:'absolute',inset:0,display:'flex',alignItems:'center',justifyContent:'center',pointerEvents:'none'}}>
+            <div style={{width:170,height:170,border:`3px solid ${flash?'#22c55e':'rgba(255,255,255,.5)'}`,borderRadius:14,boxShadow:flash?'0 0 0 5px rgba(34,197,94,.25)':'none',transition:'border-color .15s,box-shadow .15s'}}/>
+          </div>
+        )}
+        {!ready && !camError && <div style={{position:'absolute',inset:0,display:'flex',alignItems:'center',justifyContent:'center',color:'#64748b',fontSize:14}}>Starting camera…</div>}
+        {camError && <div style={{position:'absolute',inset:0,display:'flex',alignItems:'center',justifyContent:'center',padding:24,color:'#fca5a5',fontSize:13,textAlign:'center',whiteSpace:'pre-line',lineHeight:1.7}}>{camError}</div>}
+        {flash && (
+          <div style={{position:'absolute',bottom:0,left:0,right:0,background:'rgba(22,163,74,.93)',padding:'12px 16px',display:'flex',justifyContent:'space-between',alignItems:'center',animation:'flashIn .15s ease-out'}}>
+            <div>
+              <div style={{color:'#fff',fontWeight:800,fontSize:17}}>{flash.bin}</div>
+              {flash.binLocation && <div style={{color:'rgba(255,255,255,.8)',fontSize:12,marginTop:2}}>🗄 {flash.binLocation}</div>}
+            </div>
+            <div style={{textAlign:'right'}}>
+              <div style={{color:'#d1fae5',fontWeight:800,fontSize:15}}>{flash.itemCount}</div>
+              <div style={{color:'rgba(255,255,255,.7)',fontSize:11}}>items</div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {ready && !camError && !flash && log.length === 0 && (
+        <div style={{textAlign:'center',color:'#64748b',fontSize:13,padding:'4px 0'}}>Point camera at a bin QR sticker — scans automatically</div>
+      )}
+
+      {log.length > 0 && (
+        <div className="card" style={{padding:0,overflow:'hidden'}}>
+          <div style={{padding:'10px 16px',fontSize:11,fontWeight:700,color:'#94a3b8',textTransform:'uppercase',letterSpacing:.8,borderBottom:'1px solid #1e3a5f',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+            <span>Scanned this session ({log.length})</span>
+            <button onClick={() => { setLog([]); scannedSet.current.clear(); }} style={{background:'none',border:'none',color:'#64748b',cursor:'pointer',fontSize:12,fontWeight:700}}>Clear</button>
+          </div>
+          {log.map((e, i) => (
+            <div key={i} style={{padding:'11px 16px',borderBottom: i < log.length-1 ? '1px solid #1e3a5f' : 'none',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+              <div>
+                <div style={{fontWeight:700,color:'#f1f5f9',fontSize:14}}>{e.bin}</div>
+                {e.binLocation && <div style={{color:'#64748b',fontSize:12,marginTop:2}}>🗄 {e.binLocation}</div>}
+              </div>
+              <div style={{color:'#86efac',fontSize:14,fontWeight:700}}>{e.itemCount} items</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Bin Labels Tab ─────────────────────────────────────────────────────────────
+function BinLabelsTab({ bins, inventory, binLocations, onSaveBinLocation, namedLocations, onSaveNamedLocation }) {
+  const [view, setView] = useState('labels'); // 'labels' | 'scanner'
+  const allBins = [...new Set([...(bins||[]), ...(inventory||[]).map(i => i.bin).filter(Boolean)])].sort();
+
+  const printAll = () => {
+    // Gather canvas data from rendered QR codes
+    const cards = document.querySelectorAll('[data-bin-label]');
+    const items = [];
+    cards.forEach(card => {
+      const bin   = card.getAttribute('data-bin-label');
+      const loc   = (binLocations || {})[bin] || '';
+      const cnt   = (inventory || []).filter(i => i.bin === bin).length;
+      const canvas = card.querySelector('canvas');
+      const imgSrc = canvas ? canvas.toDataURL('image/png') : '';
+      items.push({ bin, loc, cnt, imgSrc });
+    });
+    const win = window.open('', '_blank');
+    if (!win) { alert('Pop-up blocked — please allow pop-ups and try again.'); return; }
+    win.document.write(`<!DOCTYPE html><html><head><title>Bin QR Labels</title><style>
+      *{box-sizing:border-box;margin:0;padding:0}
+      body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#fff}
+      .page{display:flex;flex-wrap:wrap;gap:14px;padding:20px;justify-content:flex-start}
+      .label{border:2px solid #0f172a;border-radius:12px;padding:14px 12px;width:180px;text-align:center;page-break-inside:avoid}
+      .label img{width:150px;height:150px;display:block;margin:0 auto}
+      .name{font-weight:800;font-size:15px;margin:8px 0 3px;color:#0f172a}
+      .loc{font-size:11px;color:#64748b;margin-bottom:2px}
+      .cnt{font-size:11px;color:#94a3b8;margin-bottom:4px}
+      .code{font-size:9px;color:#94a3b8;font-family:monospace}
+      @media print{body{margin:0}.page{gap:10px;padding:12px}}
+    </style></head><body><div class="page">
+      ${items.map(it => `<div class="label">
+        ${it.imgSrc ? `<img src="${it.imgSrc}"/>` : '<div style="width:150px;height:150px;background:#f1f5f9;margin:0 auto;border-radius:6px"></div>'}
+        <div class="name">${it.bin}</div>
+        ${it.loc ? `<div class="loc">📍 ${it.loc}</div>` : ''}
+        <div class="cnt">${it.cnt} item${it.cnt !== 1 ? 's' : ''}</div>
+        <div class="code">OSTEO-BIN:${it.bin}</div>
+      </div>`).join('')}
+    </div><script>window.addEventListener('load',function(){setTimeout(function(){window.print();},400);})</script></body></html>`);
+    win.document.close();
+  };
+
+  return (
+    <div className="container">
+      {/* Header */}
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16,flexWrap:'wrap',gap:8}}>
+        <div>
+          <div style={{fontSize:18,fontWeight:800,color:'#f1f5f9'}}>🏷️ Bin Labels</div>
+          <div style={{fontSize:12,color:'#64748b',marginTop:2}}>{allBins.length} bin{allBins.length !== 1 ? 's' : ''} · scan QR stickers to identify bins</div>
+        </div>
+        <div style={{display:'flex',background:'#1e3a5f',borderRadius:9,padding:3,gap:3}}>
+          <button onClick={() => setView('labels')} style={{background:view==='labels'?'#1e40af':'transparent',color:view==='labels'?'#fff':'#94a3b8',border:'none',borderRadius:7,padding:'8px 16px',fontWeight:700,cursor:'pointer',fontSize:13,transition:'background .15s'}}>
+            🏷️ Labels
+          </button>
+          <button onClick={() => setView('scanner')} style={{background:view==='scanner'?'#1e40af':'transparent',color:view==='scanner'?'#fff':'#94a3b8',border:'none',borderRadius:7,padding:'8px 16px',fontWeight:700,cursor:'pointer',fontSize:13,transition:'background .15s'}}>
+            📷 Scan Bins
+          </button>
+        </div>
+      </div>
+
+      {/* Labels view */}
+      {view === 'labels' && (
+        allBins.length === 0
+          ? <div className="card"><div className="empty">No bins yet. Create bins in the 📦 Bins tab first, then come back here to generate QR labels.</div></div>
+          : <>
+              <button onClick={printAll} style={{width:'100%',marginBottom:14,background:'#1e40af',color:'#fff',border:'none',borderRadius:10,padding:'13px',fontWeight:800,cursor:'pointer',fontSize:14}}>
+                🖨️ Print All Labels ({allBins.length})
+              </button>
+              <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(190px,1fr))',gap:12}}>
+                {allBins.map(bin => (
+                  <div key={bin} data-bin-label={bin}>
+                    <BinLabelCard
+                      bin={bin}
+                      location={(binLocations || {})[bin] || ''}
+                      onSaveLocation={loc => onSaveBinLocation(bin, loc)}
+                      itemCount={(inventory || []).filter(i => i.bin === bin).length}
+                    />
+                  </div>
+                ))}
+              </div>
+            </>
+      )}
+
+      {/* Scanner view */}
+      {view === 'scanner' && (
+        <>
+          <div className="card" style={{marginBottom:12,padding:'12px 16px',background:'#1e3a5f',border:'none'}}>
+            <div style={{fontSize:13,color:'#94a3b8',lineHeight:1.7}}>
+              Point at bin QR stickers one at a time — each scan logs automatically with no button tap needed. Great for quickly auditing multiple bins.
+            </div>
+          </div>
+          <BinQRScannerPanel inventory={inventory} binLocations={binLocations} namedLocations={namedLocations} onSaveNamedLocation={onSaveNamedLocation}/>
+        </>
+      )}
+    </div>
+  );
+}
+
 // ── Main App ──────────────────────────────────────────────────────────────────
 function App() {
   const [token, setToken] = useState(null);
-  const [data, setData] = useState({ inventory: [], bins: [], gtinMap: {} });
+  const [data, setData] = useState({ inventory: [], bins: [], gtinMap: {}, binLocations: {}, namedLocations: [] });
   const [activeTab, setActiveTab] = useState('add');
   const [syncStatus, setSyncStatus] = useState('ok');
   const [syncMsg, setSyncMsg] = useState('');
@@ -8863,9 +9295,11 @@ function App() {
     setSyncStatus('pending'); setSyncMsg('Loading from OneDrive...');
     try {
       const d = await readOneDrive(t);
-      let inventory = (d && d.inventory) ? d.inventory : [];
-      const bins    = (d && d.bins)      ? d.bins      : [];
-      const gtinMap = (d && d.gtinMap)   ? d.gtinMap   : {};
+      let inventory      = (d && d.inventory)     ? d.inventory     : [];
+      const bins         = (d && d.bins)           ? d.bins          : [];
+      const gtinMap      = (d && d.gtinMap)        ? d.gtinMap       : {};
+      const binLocations   = (d && d.binLocations)   ? d.binLocations   : {};
+      const namedLocations = (d && d.namedLocations) ? d.namedLocations : [];
       // Also read Excel — import new rows, or create file if it doesn't exist yet
       try {
         const wb = await readOneDriveExcel(t);
@@ -8881,11 +9315,11 @@ function App() {
       // Deduplicate: merge identical REF+LOT+Expiry items in same bin
       const dedupedInventory = deduplicateInventory(inventory);
       const hadDups = dedupedInventory.length < inventory.length;
-      setData({ inventory: dedupedInventory, bins, gtinMap });
+      setData({ inventory: dedupedInventory, bins, gtinMap, binLocations, namedLocations });
       setSyncStatus('ok'); setSyncMsg('Synced with OneDrive ✓');
       // If duplicates were found, persist the cleaned data and update Excel
       if (hadDups) {
-        const cleanData = { inventory: dedupedInventory, bins, gtinMap };
+        const cleanData = { inventory: dedupedInventory, bins, gtinMap, binLocations, namedLocations };
         try {
           await writeOneDrive(t, cleanData);
           await writeOneDriveExcel(t, dedupedInventory, bins);
@@ -9029,6 +9463,17 @@ function App() {
       return updated;
     });
   }
+  function saveBinLocation(binName, location) {
+    setData(d => ({...d, binLocations: {...(d.binLocations||{}), [binName]: location}}));
+  }
+  function saveNamedLocation(entry) {
+    // entry = {name, lat, lng, address}; replace any existing entry within 200m
+    setData(d => {
+      const existing = (d.namedLocations||[]).filter(nl => haversineM(nl.lat, nl.lng, entry.lat, entry.lng) >= 200);
+      return {...d, namedLocations: [...existing, {...entry, id: Date.now().toString()}]};
+    });
+  }
+
   function startScan(bin, mode) { console.log('[App] startScan bin:', bin, 'mode:', mode); setScanBinActive(bin); setScanMode(mode || 'add'); setScanning(true); }
 
   async function handleDeduplicate(setMsg) {
@@ -9063,6 +9508,7 @@ function App() {
     {id:'add',label:'🏠 Home'},
     {id:'inventory',label:`📋 Inventory${data.inventory.length?` (${data.inventory.length})`:''}` },
     {id:'bins',label:'📦 Bins'},
+    {id:'labels',label:'🏷️ Bin Labels'},
     {id:'alerts',label:`🚨 Alerts${alertCount?` (${alertCount})`:''}` },
   ];
 
@@ -9086,6 +9532,7 @@ function App() {
       {activeTab==='add'&&<AddTab onAdd={addItem} bins={[...new Set([...(data.bins||[]),...(data.inventory||[]).map(i=>i.bin).filter(Boolean)])].sort()} onStartScan={startScan} scanMode={scanMode} setScanMode={setScanMode}/>}
       {activeTab==='inventory'&&<InventoryTab items={data.inventory||[]} onRemove={removeItem} onUpdate={updateItem}/>}
       {activeTab==='bins'&&<BinsTab items={data.inventory||[]} bins={data.bins||[]} onCreateBin={createBin} onDeleteBin={deleteBin} onRemove={removeItem} onUpdate={updateItem} onDeduplicate={handleDeduplicate}/>}
+      {activeTab==='labels'&&<BinLabelsTab bins={data.bins||[]} inventory={data.inventory||[]} binLocations={data.binLocations||{}} onSaveBinLocation={saveBinLocation} namedLocations={data.namedLocations||[]} onSaveNamedLocation={saveNamedLocation}/>}
       {activeTab==='alerts'&&<AlertsTab items={data.inventory||[]}/>}
     </div>
   );
