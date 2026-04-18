@@ -8922,7 +8922,8 @@ function BinLabelCard({ bin, location, onSaveLocation, itemCount }) {
 function haversineM(lat1, lng1, lat2, lng2) {
   const R = 6371000, r = Math.PI / 180;
   const dLat = (lat2 - lat1) * r, dLng = (lng2 - lng1) * r;
-  const a = Math.sin(dLat/2)**2 + Math.cos(lat1*r)*Math.cos(lat2*r)*Math.sin(dLng/2)**2;
+  const sdLat = Math.sin(dLat/2), sdLng = Math.sin(dLng/2);
+  const a = sdLat*sdLat + Math.cos(lat1*r)*Math.cos(lat2*r)*sdLng*sdLng;
   return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
 }
 
