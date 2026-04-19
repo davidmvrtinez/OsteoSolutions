@@ -179,20 +179,30 @@ async function writeOneDriveExcel(token, inventory, bins) {
 }
 
 function importFromExcel(wb, existingInventory) {
-  const existingIds = new Set(existingInventory.map(i=>String(i.id)));
+  const norm = v => (v == null ? '' : String(v).trim());
+  // Primary check: integer-safe ID comparison (Excel strips float decimals)
+  const existingIds = new Set(existingInventory.map(i => String(Math.floor(Number(i.id)))));
+  // Secondary check: fingerprint by REF+LOT+Expiry+Bin prevents re-import even if ID mismatches
+  const existingFingerprints = new Set(existingInventory.map(i =>
+    [norm(i.productNumber), norm(i.lot), norm(String(i.expDate||'').slice(0,10)), norm(i.bin)].join('||')
+  ));
   const added = [];
   for (const name of wb.SheetNames) {
     if (name === 'All Items') continue;
     const rows = XLSX.utils.sheet_to_json(wb.Sheets[name]);
     for (const row of rows) {
       if (!row.REF) continue;
-      const id = row.ID ? String(row.ID) : null;
+      const id = row.ID ? String(Math.floor(Number(row.ID))) : null;
       if (id && existingIds.has(id)) continue;
+      const binName = norm(String(row.Bin || name));
+      const fp = [norm(String(row.REF||'')), norm(String(row.LOT||'')),
+                  norm(String(row.Expiry||'').slice(0,10)), binName].join('||');
+      if (existingFingerprints.has(fp)) continue;
       added.push({
-        id: id ? Number(id) : (Date.now() + Math.random()),
+        id: id ? Number(id) : Date.now(),
         productNumber: String(row.REF||''), productName: String(row['Item Description']||''),
         lot: String(row.LOT||''), expDate: row.Expiry?String(row.Expiry).slice(0,10):null,
-        bin: String(row.Bin||name), qty: Number(row.Qty)||1,
+        bin: binName, qty: Number(row.Qty)||1,
         addedAt: row['Added Date']?String(row['Added Date']):new Date().toISOString()
       });
     }
@@ -8091,20 +8101,21 @@ function lookupProduct(gtin14, gtinMap) {
   // 3. Unknown GTIN - signal caller to ask user for REF
   return { productNumber: '', productName: '', isNew: true };
 }
-// Merge items with identical REF + LOT + Expiry within the same bin; sum their quantities.
-// Values are normalised (trimmed, null/undefined treated as "") before comparison.
+// Merge rows with identical REF + LOT + Expiry (any bin), summing their quantities.
+// Normalises values (trim, null→"") before comparison.
+// NOTE: quantities are summed — each row represents a distinct physical scan / unit.
 function deduplicateInventory(inventory) {
   const norm = v => (v == null ? '' : String(v).trim());
   const seen = {};
   const out  = [];
   for (const item of inventory) {
-    // Match on REF + LOT + expiry only — bin is not part of the merge criteria
     const key = [norm(item.productNumber), norm(item.lot), norm(item.expDate)].join('||');
     if (seen[key] !== undefined) {
+      // Only add qty of the duplicate; do NOT carry over the first item's qty again
       out[seen[key]].qty = (out[seen[key]].qty || 1) + (item.qty || 1);
     } else {
       seen[key] = out.length;
-      out.push({...item});
+      out.push({...item, qty: item.qty || 1});
     }
   }
   return out;
@@ -8216,7 +8227,7 @@ function BarcodeScanner({ bin, mode, onAdd, onRemove, onClose, gtinMap, onSaveGt
           const resolvedRef = looked.productNumber;
           console.log('[Scanner] Resolved REF:', resolvedRef, 'Name:', looked.productName);
           const item = {
-            id: Date.now() + Math.random(),
+            id: Date.now(),
             _gtin14: p.gtin14,
             productNumber: resolvedRef || p.gtin14 || raw.trim(),
             productName: looked.productName || '',
@@ -9627,10 +9638,10 @@ function App() {
   const alertCount = data.inventory.filter(i=>i.expDate&&daysUntil(i.expDate)<=30).length;
   const tabs = [
     {id:'add',label:'🏠 Home'},
-    {id:'inventory',label:`📋 Inventory${data.inventory.length?` (${data.inventory.length})`:''}` },
     {id:'bins',label:'📦 Bins'},
     {id:'labels',label:'🏷️ Bin Labels'},
     {id:'alerts',label:`🚨 Alerts${alertCount?` (${alertCount})`:''}` },
+    {id:'inventory',label:`📋 Inventory${data.inventory.length?` (${data.inventory.length})`:''}` },
   ];
 
   return (
