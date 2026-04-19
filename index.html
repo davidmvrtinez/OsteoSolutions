@@ -8883,6 +8883,11 @@ function AlertsTab({ items }) {
   </div>);
 }
 
+// ── Stable bin ID generator ───────────────────────────────────────────────────
+function genBinId() {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+}
+
 // ── Bin QR Code renderer ──────────────────────────────────────────────────────
 function BinQRCode({ text, size }) {
   const ref = useRef(null);
@@ -8902,7 +8907,7 @@ function BinQRCode({ text, size }) {
 }
 
 // ── Single bin label card ─────────────────────────────────────────────────────
-function BinLabelCard({ bin, location, onSaveLocation, itemCount }) {
+function BinLabelCard({ bin, qrId, location, onSaveLocation, itemCount }) {
   const wrapRef = useRef(null);
   const [loc, setLoc] = useState(location || '');
   const [saved, setSaved] = useState(false);
@@ -8943,7 +8948,7 @@ function BinLabelCard({ bin, location, onSaveLocation, itemCount }) {
     <div className="card" style={{display:'flex',flexDirection:'column',alignItems:'center',gap:10,padding:16,textAlign:'center'}}>
       <div style={{fontSize:15,fontWeight:800,color:'#f1f5f9',letterSpacing:.3}}>{bin}</div>
       <div ref={wrapRef} style={{background:'#fff',borderRadius:8,padding:6,display:'inline-block'}}>
-        <BinQRCode text={`OSTEO-BIN:${bin}`} size={140}/>
+        <BinQRCode text={`OSTEO-BIN:${qrId||bin}`} size={140}/>
       </div>
       <div style={{fontSize:10,color:'#475569',fontFamily:'monospace',letterSpacing:.3}}>OSTEO-BIN:{bin}</div>
       <div style={{fontSize:12,color:'#64748b'}}>{itemCount} item{itemCount !== 1 ? 's' : ''}</div>
@@ -8994,13 +8999,42 @@ async function reverseGeocode(lat, lng) {
   }
 }
 
+// ── Predefined named locations (from Locations.xlsx) ─────────────────────────
+const KNOWN_LOCATIONS = [
+  { name: 'DTSC',        address: '801 N Orange Ave Suite 630, Orlando, FL 32801' },
+  { name: 'ORMC',        address: '52 W Underwood St, Orlando, FL 32806' },
+  { name: 'AH Orlando',  address: '601 E Rollins St, Orlando, FL 32803' },
+  { name: 'HCA Ocala',   address: '1500 SW 1st Ave, Ocala, FL 34471' },
+  { name: 'UF SP',       address: '1451 El Camino Real, The Villages, FL 32159' },
+  { name: 'UF Leesburg', address: '600 E Dixie Ave, Leesburg, FL 34748' },
+  { name: 'AH Ocala',    address: '1500 SW 1st Ave, Ocala, FL 34471' },
+  { name: 'Jewett',      address: '60 Columbia St, Orlando, FL 32806' },
+  { name: 'Home',        address: '112 N Fern Creek Ave, Orlando, FL 32803' },
+  { name: 'Ohub',        address: '930 Sligh Blvd, Orlando, FL 32806' },
+];
+
+// Forward-geocode a single address → {lat, lng} or null
+async function geocodeAddress(address) {
+  try {
+    const r = await fetch(
+      `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(address)}&format=json&limit=1`,
+      { headers: { 'Accept-Language': 'en-US,en' } }
+    );
+    const j = await r.json();
+    if (j && j[0]) return { lat: parseFloat(j[0].lat), lng: parseFloat(j[0].lon) };
+    return null;
+  } catch(_) { return null; }
+}
+
 // ── Bin QR scanner panel — rapid multi-bin scanning with GPS location ─────────
-function BinQRScannerPanel({ inventory, binLocations, namedLocations, onSaveNamedLocation }) {
+function BinQRScannerPanel({ inventory, binLocations, binIds, locationCoords, namedLocations, onSaveNamedLocation, onUpdateBinLocation }) {
   const videoRef    = useRef(null);
   const readerRef   = useRef(null);
   const streamRef   = useRef(null);
   const cooldown    = useRef(false);
   const scannedSet  = useRef(new Set()); // dedup: ignore bins already scanned this session
+
+  const currentLocRef = useRef(''); // always-current location name for scan callback
 
   const [ready,          setReady]         = useState(false);
   const [camError,       setCamError]      = useState('');
@@ -9008,30 +9042,42 @@ function BinQRScannerPanel({ inventory, binLocations, namedLocations, onSaveName
   const [log,            setLog]           = useState([]);
   // GPS / location
   const [gpsState,       setGpsState]      = useState('loading'); // loading|ok|denied|unavail
-  const [currentCoords,  setCurrentCoords] = useState(null);   // {lat, lng}
+  const [matchedName,    setMatchedName]   = useState('');
   const [currentAddress, setCurrentAddress]= useState('');
-  const [matchedName,    setMatchedName]   = useState('');     // saved location name if within 200m
-  const [showNameInput,  setShowNameInput] = useState(false);
-  const [nameInput,      setNameInput]     = useState('');
-  const [nameSaved,      setNameSaved]     = useState(false);
 
-  // Get GPS on mount
+  // Get GPS on mount — match against KNOWN_LOCATIONS using geocoded coords
   useEffect(() => {
     if (!navigator.geolocation) { setGpsState('unavail'); return; }
     navigator.geolocation.getCurrentPosition(
       async (pos) => {
         const lat = pos.coords.latitude, lng = pos.coords.longitude;
-        setCurrentCoords({ lat, lng });
-        // Check if within 200m of any saved named location
-        const match = (namedLocations || []).find(nl => haversineM(nl.lat, nl.lng, lat, lng) < 200);
-        if (match) {
-          setMatchedName(match.name);
-          setCurrentAddress(match.address || '');
+        const coords = locationCoords || {};
+        // Check KNOWN_LOCATIONS first (within 500m)
+        let found = null;
+        for (var i = 0; i < KNOWN_LOCATIONS.length; i++) {
+          const loc = KNOWN_LOCATIONS[i];
+          const c = coords[loc.name];
+          if (c && haversineM(c.lat, c.lng, lat, lng) < 500) { found = loc; break; }
+        }
+        if (found) {
+          setMatchedName(found.name);
+          setCurrentAddress(found.address);
+          currentLocRef.current = found.name;
           setGpsState('ok');
         } else {
-          const addr = await reverseGeocode(lat, lng);
-          setCurrentAddress(addr);
-          setGpsState('ok');
+          // Check user-saved named locations (within 200m)
+          const userMatch = (namedLocations || []).find(nl => haversineM(nl.lat, nl.lng, lat, lng) < 200);
+          if (userMatch) {
+            setMatchedName(userMatch.name);
+            setCurrentAddress(userMatch.address || '');
+            currentLocRef.current = userMatch.name;
+            setGpsState('ok');
+          } else {
+            const addr = await reverseGeocode(lat, lng);
+            setCurrentAddress(addr);
+            currentLocRef.current = addr;
+            setGpsState('ok');
+          }
         }
       },
       (err) => {
@@ -9040,17 +9086,7 @@ function BinQRScannerPanel({ inventory, binLocations, namedLocations, onSaveName
       },
       { timeout: 8000, maximumAge: 60000 }
     );
-  }, []);
-
-  const saveLocationName = () => {
-    if (!nameInput.trim() || !currentCoords) return;
-    onSaveNamedLocation({ name: nameInput.trim(), lat: currentCoords.lat, lng: currentCoords.lng, address: currentAddress });
-    setMatchedName(nameInput.trim());
-    setShowNameInput(false);
-    setNameInput('');
-    setNameSaved(true);
-    setTimeout(() => setNameSaved(false), 2000);
-  };
+  }, [locationCoords]);
 
   // Camera + ZXing
   useEffect(() => {
@@ -9078,14 +9114,20 @@ function BinQRScannerPanel({ inventory, binLocations, namedLocations, onSaveName
           if (result && !cooldown.current) {
             const raw = result.getText();
             if (raw.startsWith('OSTEO-BIN:')) {
-              const binName = raw.slice(10).trim();
+              const scanned = raw.slice(10).trim();
+              // Resolve stable ID → bin name; fall back to direct name for backward compat
+              const idEntry = Object.entries(binIds||{}).find(function(e){return e[1]===scanned;});
+              const binName = idEntry ? idEntry[0] : scanned;
               // Duplicate guard — ignore if already scanned this session
               if (scannedSet.current.has(binName)) return;
               scannedSet.current.add(binName);
               cooldown.current = true;
               try { navigator.vibrate && navigator.vibrate(80); } catch(_) {}
+              // Update bin location every scan
+              const locNow = currentLocRef.current;
+              if (locNow && onUpdateBinLocation) onUpdateBinLocation(binName, locNow);
               const cnt     = (inventory || []).filter(i => i.bin === binName).length;
-              const binLoc  = (binLocations || {})[binName] || '';
+              const binLoc  = locNow || (binLocations || {})[binName] || '';
               const entry   = { bin: binName, binLocation: binLoc, itemCount: cnt, ts: Date.now() };
               setFlash(entry);
               setLog(prev => [entry, ...prev.slice(0, 49)]);
@@ -9110,62 +9152,33 @@ function BinQRScannerPanel({ inventory, binLocations, namedLocations, onSaveName
   }, []);
 
   const displayLoc = matchedName || currentAddress;
-  const isNamed    = !!matchedName;
+  const isKnown    = !!matchedName;
 
   return (
     <div style={{display:'flex',flexDirection:'column',gap:12}}>
 
       {/* ── Location banner ── */}
       <div style={{background:'#1e3a5f',borderRadius:12,padding:'12px 14px'}}>
-        <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:8}}>
-          <div style={{flex:1,minWidth:0}}>
-            <div style={{fontSize:10,fontWeight:700,color:'#94a3b8',textTransform:'uppercase',letterSpacing:.8,marginBottom:4}}>
-              {gpsState==='loading' ? '📍 Detecting location…' : isNamed ? '📍 Location' : '📍 Current Address'}
-            </div>
-            {gpsState==='loading' && <div style={{fontSize:13,color:'#64748b',animation:'pulse .9s infinite alternate'}}>Getting GPS…</div>}
-            {gpsState==='ok' && (
-              <div style={{fontSize:14,fontWeight:isNamed?800:400,color:isNamed?'#86efac':'#f1f5f9',lineHeight:1.4,wordBreak:'break-word'}}>
-                {displayLoc || '—'}
-              </div>
-            )}
-            {/* If named, show the raw address underneath in muted text */}
-            {isNamed && currentAddress && (
-              <div style={{fontSize:11,color:'#475569',marginTop:3}}>{currentAddress}</div>
-            )}
-            {(gpsState==='denied'||gpsState==='unavail') && (
-              <div style={{fontSize:13,color:'#94a3b8'}}>
-                {gpsState==='denied' ? 'Location permission denied — allow in Settings → Safari → Location' : 'Location unavailable on this device'}
-              </div>
-            )}
-          </div>
-          {gpsState==='ok' && !isNamed && !showNameInput && (
-            <button onClick={() => setShowNameInput(true)} style={{background:'#0f2744',color:'#7dd3fc',border:'1.5px solid #334155',borderRadius:8,padding:'6px 12px',fontSize:12,fontWeight:700,cursor:'pointer',flexShrink:0,whiteSpace:'nowrap'}}>
-              ✏️ Name place
-            </button>
-          )}
-          {isNamed && (
-            <button onClick={() => { setMatchedName(''); setShowNameInput(true); setNameInput(matchedName); }} style={{background:'#0f2744',color:'#94a3b8',border:'1.5px solid #334155',borderRadius:8,padding:'6px 12px',fontSize:12,fontWeight:600,cursor:'pointer',flexShrink:0}}>
-              Edit
-            </button>
-          )}
+        <div style={{fontSize:10,fontWeight:700,color:'#94a3b8',textTransform:'uppercase',letterSpacing:.8,marginBottom:4}}>
+          📍 {gpsState==='loading' ? 'Detecting location…' : 'Current Location'}
         </div>
-        {showNameInput && (
-          <div style={{display:'flex',gap:6,marginTop:10}}>
-            <input
-              value={nameInput}
-              onChange={e => setNameInput(e.target.value)}
-              onKeyDown={e => e.key==='Enter' && saveLocationName()}
-              placeholder="e.g. St. Mary's Hospital"
-              autoFocus
-              style={{flex:1,background:'#0f2744',border:'1.5px solid #7dd3fc',borderRadius:8,padding:'9px 10px',color:'#f1f5f9',fontSize:13,minWidth:0}}
-            />
-            <button onClick={saveLocationName} disabled={!nameInput.trim()} style={{background:nameInput.trim()?'#16a34a':'#334155',color:'#fff',border:'none',borderRadius:8,padding:'9px 14px',fontWeight:800,cursor:nameInput.trim()?'pointer':'not-allowed',fontSize:13,flexShrink:0}}>
-              Save
-            </button>
-            <button onClick={() => { setShowNameInput(false); setNameInput(''); }} style={{background:'none',border:'none',color:'#64748b',cursor:'pointer',fontSize:13,padding:'4px'}}>✕</button>
+        {gpsState==='loading' && <div style={{fontSize:13,color:'#64748b'}}>Getting GPS…</div>}
+        {gpsState==='ok' && (
+          <>
+            <div style={{fontSize:16,fontWeight:isKnown?800:400,color:isKnown?'#86efac':'#f1f5f9',lineHeight:1.4}}>
+              {displayLoc || '—'}
+            </div>
+            {isKnown && currentAddress && (
+              <div style={{fontSize:11,color:'#475569',marginTop:2}}>{currentAddress}</div>
+            )}
+            {!isKnown && <div style={{fontSize:11,color:'#64748b',marginTop:2}}>No predefined location matched — scans will save the GPS address</div>}
+          </>
+        )}
+        {(gpsState==='denied'||gpsState==='unavail') && (
+          <div style={{fontSize:13,color:'#94a3b8'}}>
+            {gpsState==='denied' ? 'Location permission denied — allow in Settings → Safari → Location' : 'Location unavailable on this device'}
           </div>
         )}
-        {nameSaved && <div style={{color:'#86efac',fontSize:12,fontWeight:700,marginTop:6}}>✓ Location saved!</div>}
       </div>
 
       {/* ── Camera ── */}
@@ -9218,9 +9231,11 @@ function BinQRScannerPanel({ inventory, binLocations, namedLocations, onSaveName
 }
 
 // ── Bin Labels Tab ─────────────────────────────────────────────────────────────
-function BinLabelsTab({ bins, inventory, binLocations, onSaveBinLocation, namedLocations, onSaveNamedLocation }) {
+function BinLabelsTab({ bins, inventory, binLocations, binIds, locationCoords, onSaveBinLocation, onUpdateBinLocation, namedLocations, onSaveNamedLocation }) {
   const [view, setView] = useState('labels'); // 'labels' | 'scanner'
   const allBins = [...new Set([...(bins||[]), ...(inventory||[]).map(i => i.bin).filter(Boolean)])].sort();
+  // Get the stable QR ID for a bin (falls back to bin name for backward compat)
+  const getQrId = bin => (binIds||{})[bin] || bin;
 
   const printAll = () => {
     // Gather canvas data from rendered QR codes
@@ -9290,6 +9305,7 @@ function BinLabelsTab({ bins, inventory, binLocations, onSaveBinLocation, namedL
                   <div key={bin} data-bin-label={bin}>
                     <BinLabelCard
                       bin={bin}
+                      qrId={getQrId(bin)}
                       location={(binLocations || {})[bin] || ''}
                       onSaveLocation={loc => onSaveBinLocation(bin, loc)}
                       itemCount={(inventory || []).filter(i => i.bin === bin).length}
@@ -9308,7 +9324,7 @@ function BinLabelsTab({ bins, inventory, binLocations, onSaveBinLocation, namedL
               Point at bin QR stickers one at a time — each scan logs automatically with no button tap needed. Great for quickly auditing multiple bins.
             </div>
           </div>
-          <BinQRScannerPanel inventory={inventory} binLocations={binLocations} namedLocations={namedLocations} onSaveNamedLocation={onSaveNamedLocation}/>
+          <BinQRScannerPanel inventory={inventory} binLocations={binLocations} binIds={binIds} locationCoords={locationCoords} namedLocations={namedLocations} onSaveNamedLocation={onSaveNamedLocation} onUpdateBinLocation={onUpdateBinLocation}/>
         </>
       )}
     </div>
@@ -9318,7 +9334,7 @@ function BinLabelsTab({ bins, inventory, binLocations, onSaveBinLocation, namedL
 // ── Main App ──────────────────────────────────────────────────────────────────
 function App() {
   const [token, setToken] = useState(null);
-  const [data, setData] = useState({ inventory: [], bins: [], gtinMap: {}, binLocations: {}, namedLocations: [] });
+  const [data, setData] = useState({ inventory: [], bins: [], gtinMap: {}, binLocations: {}, namedLocations: [], binIds: {}, locationCoords: {} });
   const [activeTab, setActiveTab] = useState('add');
   const [syncStatus, setSyncStatus] = useState('ok');
   const [syncMsg, setSyncMsg] = useState('');
@@ -9349,6 +9365,12 @@ function App() {
       const gtinMap      = (d && d.gtinMap)        ? d.gtinMap       : {};
       const binLocations   = (d && d.binLocations)   ? d.binLocations   : {};
       const namedLocations = (d && d.namedLocations) ? d.namedLocations : [];
+      // Assign stable IDs to any bins that don't have one yet
+      const binIds = {...((d && d.binIds) ? d.binIds : {})};
+      const allBinNames = [...new Set([...bins, ...inventory.map(i => i.bin).filter(Boolean)])];
+      allBinNames.forEach(name => { if (!binIds[name]) binIds[name] = genBinId(); });
+      // Load cached geocoded coordinates for known locations
+      const locationCoords = {...((d && d.locationCoords) ? d.locationCoords : {})};
       // Also read Excel — import new rows, or create file if it doesn't exist yet
       try {
         const wb = await readOneDriveExcel(t);
@@ -9364,11 +9386,24 @@ function App() {
       // Deduplicate: merge identical REF+LOT+Expiry items in same bin
       const dedupedInventory = deduplicateInventory(inventory);
       const hadDups = dedupedInventory.length < inventory.length;
-      setData({ inventory: dedupedInventory, bins, gtinMap, binLocations, namedLocations });
+      setData({ inventory: dedupedInventory, bins, gtinMap, binLocations, namedLocations, binIds, locationCoords });
+      // Background: geocode any known locations that don't have coords yet
+      const missingGeo = KNOWN_LOCATIONS.filter(loc => !locationCoords[loc.name]);
+      if (missingGeo.length) {
+        (async () => {
+          const updated = {...locationCoords};
+          for (var gi = 0; gi < missingGeo.length; gi++) {
+            const coords = await geocodeAddress(missingGeo[gi].address);
+            if (coords) updated[missingGeo[gi].name] = coords;
+            if (gi < missingGeo.length - 1) await new Promise(function(res){setTimeout(res,1200);});
+          }
+          setData(function(prev){return {...prev, locationCoords: updated};});
+        })();
+      }
       setSyncStatus('ok'); setSyncMsg('Synced with OneDrive ✓');
       // If duplicates were found, persist the cleaned data and update Excel
       if (hadDups) {
-        const cleanData = { inventory: dedupedInventory, bins, gtinMap, binLocations, namedLocations };
+        const cleanData = { inventory: dedupedInventory, bins, gtinMap, binLocations, namedLocations, binIds, locationCoords };
         try {
           await writeOneDrive(t, cleanData);
           await writeOneDriveExcel(t, dedupedInventory, bins);
@@ -9488,7 +9523,9 @@ function App() {
   function updateItem(id,u) { setData(d=>({...d,inventory:d.inventory.map(i=>i.id===id?{...i,...u}:i)})); }
   function createBin(name) {
     setData(d => {
-      const updated = {...d, bins: [...d.bins.filter(b=>b!==name), name].sort()};
+      const newBinIds = {...(d.binIds||{})};
+      if (!newBinIds[name]) newBinIds[name] = genBinId();
+      const updated = {...d, bins: [...d.bins.filter(b=>b!==name), name].sort(), binIds: newBinIds};
       // Immediately write Excel with the new empty bin sheet
       if (typeof XLSX !== 'undefined' && token) {
         getToken().then(t => {
@@ -9503,11 +9540,14 @@ function App() {
     setData(d => {
       const newBinLocations = {...(d.binLocations||{})};
       delete newBinLocations[name];
+      const newBinIds = {...(d.binIds||{})};
+      delete newBinIds[name];
       const updated = {
         ...d,
         bins: d.bins.filter(b=>b!==name),
         inventory: d.inventory.map(i => i.bin === name ? {...i, bin: ''} : i),
-        binLocations: newBinLocations
+        binLocations: newBinLocations,
+        binIds: newBinIds
       };
       // Immediately write Excel to remove the deleted bin's sheet
       if (typeof XLSX !== 'undefined' && token) {
@@ -9530,7 +9570,11 @@ function App() {
         newBinLocations[upper] = newBinLocations[oldName];
         delete newBinLocations[oldName];
       }
-      const updated = {...d, bins: newBins, inventory: newInventory, binLocations: newBinLocations};
+      // Carry stable QR ID to new name so printed stickers keep working
+      const newBinIds = {...(d.binIds||{})};
+      newBinIds[upper] = newBinIds[oldName] || genBinId();
+      delete newBinIds[oldName];
+      const updated = {...d, bins: newBins, inventory: newInventory, binLocations: newBinLocations, binIds: newBinIds};
       if (typeof XLSX !== 'undefined' && token) {
         getToken().then(t => {
           if (t) writeOneDriveExcel(t, updated.inventory||[], updated.bins||[])
@@ -9609,7 +9653,7 @@ function App() {
       {activeTab==='add'&&<AddTab onAdd={addItem} bins={[...new Set([...(data.bins||[]),...(data.inventory||[]).map(i=>i.bin).filter(Boolean)])].sort()} onStartScan={startScan} scanMode={scanMode} setScanMode={setScanMode}/>}
       {activeTab==='inventory'&&<InventoryTab items={data.inventory||[]} onRemove={removeItem} onUpdate={updateItem}/>}
       {activeTab==='bins'&&<BinsTab items={data.inventory||[]} bins={data.bins||[]} binLocations={data.binLocations||{}} onCreateBin={createBin} onDeleteBin={deleteBin} onRenameBin={renameBin} onRemove={removeItem} onUpdate={updateItem} onDeduplicate={handleDeduplicate}/>}
-      {activeTab==='labels'&&<BinLabelsTab bins={data.bins||[]} inventory={data.inventory||[]} binLocations={data.binLocations||{}} onSaveBinLocation={saveBinLocation} namedLocations={data.namedLocations||[]} onSaveNamedLocation={saveNamedLocation}/>}
+      {activeTab==='labels'&&<BinLabelsTab bins={data.bins||[]} inventory={data.inventory||[]} binLocations={data.binLocations||{}} binIds={data.binIds||{}} locationCoords={data.locationCoords||{}} onSaveBinLocation={saveBinLocation} onUpdateBinLocation={saveBinLocation} namedLocations={data.namedLocations||[]} onSaveNamedLocation={saveNamedLocation}/>}
       {activeTab==='alerts'&&<AlertsTab items={data.inventory||[]}/>}
     </div>
   );
