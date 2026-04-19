@@ -8604,15 +8604,36 @@ function AddTab({ onAdd, bins, onStartScan, scanMode, setScanMode }) {
 }
 
 // ── Inventory Tab ─────────────────────────────────────────────────────────────
-function InventoryTab({ items, onRemove, onUpdate }) {
+function InventoryTab({ items, allData, onRemove, onUpdate }) {
   const [search,setSearch] = useState('');
   const [editId,setEditId] = useState(null);
   const [editBin,setEditBin] = useState('');
   const [editQty,setEditQty] = useState(1);
   const filtered = items.filter(i=>[i.productNumber,i.productName,i.lot,i.bin].some(f=>f?.toLowerCase().includes(search.toLowerCase())));
+
+  function downloadBackup() {
+    const now = new Date();
+    const stamp = now.getFullYear() + '-' +
+      String(now.getMonth()+1).padStart(2,'0') + '-' +
+      String(now.getDate()).padStart(2,'0') + '_' +
+      String(now.getHours()).padStart(2,'0') +
+      String(now.getMinutes()).padStart(2,'0');
+    const blob = new Blob([JSON.stringify(allData, null, 2)], {type:'application/json'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `osteo-backup-${stamp}.json`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }
+
   return (
     <div className="card">
-      <h2 style={{fontWeight:700,marginBottom:12,color:'#1e40af',fontSize:18}}>Inventory ({items.length} items)</h2>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12,flexWrap:'wrap',gap:8}}>
+        <h2 style={{fontWeight:700,color:'#1e40af',fontSize:18,margin:0}}>Inventory ({items.length} items)</h2>
+        <button onClick={downloadBackup} style={{background:'#0f2744',color:'#86efac',border:'1.5px solid #22c55e',borderRadius:8,padding:'8px 14px',fontWeight:700,cursor:'pointer',fontSize:13,whiteSpace:'nowrap'}}>
+          ⬇ Download Backup
+        </button>
+      </div>
       <div className="search-row"><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search by product, lot, bin..."/></div>
       {filtered.length===0 ? <div className="empty">{search?'No results found.':'No inventory yet. Add items above.'}</div> : (
         <div style={{overflowX:'auto'}}><table>
@@ -9662,7 +9683,7 @@ function App() {
       </div>
       <div className="tabs">{tabs.map(t=><div key={t.id} className={`tab${activeTab===t.id?' active':''}`} onClick={()=>setActiveTab(t.id)}>{t.label}</div>)}</div>
       {activeTab==='add'&&<AddTab onAdd={addItem} bins={[...new Set([...(data.bins||[]),...(data.inventory||[]).map(i=>i.bin).filter(Boolean)])].sort()} onStartScan={startScan} scanMode={scanMode} setScanMode={setScanMode}/>}
-      {activeTab==='inventory'&&<InventoryTab items={data.inventory||[]} onRemove={removeItem} onUpdate={updateItem}/>}
+      {activeTab==='inventory'&&<InventoryTab items={data.inventory||[]} allData={data} onRemove={removeItem} onUpdate={updateItem}/>}
       {activeTab==='bins'&&<BinsTab items={data.inventory||[]} bins={data.bins||[]} binLocations={data.binLocations||{}} onCreateBin={createBin} onDeleteBin={deleteBin} onRenameBin={renameBin} onRemove={removeItem} onUpdate={updateItem} onDeduplicate={handleDeduplicate}/>}
       {activeTab==='labels'&&<BinLabelsTab bins={data.bins||[]} inventory={data.inventory||[]} binLocations={data.binLocations||{}} binIds={data.binIds||{}} locationCoords={data.locationCoords||{}} onSaveBinLocation={saveBinLocation} onUpdateBinLocation={saveBinLocation} namedLocations={data.namedLocations||[]} onSaveNamedLocation={saveNamedLocation}/>}
       {activeTab==='alerts'&&<AlertsTab items={data.inventory||[]}/>}
