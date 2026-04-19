@@ -8628,11 +8628,14 @@ function InventoryTab({ items, onRemove, onUpdate }) {
 }
 
 // ── Bin Card (collapsible, with edit / delete / bulk-select) ──────────────────
-function BinCard({ binName, list, isPreCreated, onDeleteBin, onRemove, onUpdate }) {
+function BinCard({ binName, list, isPreCreated, location, onDeleteBin, onRenameBin, onRemove, onUpdate }) {
   const [open,      setOpen]      = useState(false);
   const [selected,  setSelected]  = useState(new Set());
   const [editingId, setEditingId] = useState(null);
   const [editForm,  setEditForm]  = useState({});
+  const [menuOpen,  setMenuOpen]  = useState(false);
+  const [renaming,  setRenaming]  = useState(false);
+  const [newName,   setNewName]   = useState('');
 
   const isEmpty     = list.length === 0;
   const allSelected = list.length > 0 && selected.size === list.length;
@@ -8656,41 +8659,84 @@ function BinCard({ binName, list, isPreCreated, onDeleteBin, onRemove, onUpdate 
     onUpdate(editingId, editForm);
     setEditingId(null);
   }
+  function handleDelete() {
+    setMenuOpen(false);
+    const msg = list.length > 0
+      ? `Delete bin "${binName}"? The ${list.length} item${list.length>1?'s':''} inside will become unassigned.`
+      : `Delete empty bin "${binName}"?`;
+    if (window.confirm(msg)) onDeleteBin(binName);
+  }
+  function handleRename() {
+    setMenuOpen(false);
+    setNewName(binName);
+    setRenaming(true);
+  }
+  function commitRename() {
+    const v = newName.toUpperCase().trim();
+    if (v && v !== binName) onRenameBin(binName, v);
+    setRenaming(false);
+  }
 
   return (
     <div style={{marginBottom:12}}>
+      {/* ── Rename bar ── */}
+      {renaming && (
+        <div style={{background:'#1e3a5f',borderRadius:'10px 10px 0 0',padding:'10px 14px',display:'flex',gap:8,alignItems:'center'}} onClick={e=>e.stopPropagation()}>
+          <input
+            value={newName}
+            onChange={e=>setNewName(e.target.value.toUpperCase())}
+            onKeyDown={e=>{if(e.key==='Enter')commitRename();if(e.key==='Escape')setRenaming(false);}}
+            autoFocus
+            style={{flex:1,background:'#0f2744',border:'1.5px solid #7dd3fc',borderRadius:8,padding:'8px 10px',color:'#f1f5f9',fontSize:14,fontWeight:700}}
+          />
+          <button onClick={commitRename} style={{background:'#16a34a',color:'#fff',border:'none',borderRadius:8,padding:'8px 14px',fontWeight:700,cursor:'pointer',fontSize:13,flexShrink:0}}>Save</button>
+          <button onClick={()=>setRenaming(false)} style={{background:'none',border:'none',color:'#94a3b8',cursor:'pointer',fontSize:18,padding:'4px 8px',flexShrink:0}}>✕</button>
+        </div>
+      )}
       {/* ── Header (click to open/close) ── */}
       <div
         onClick={()=>setOpen(o=>!o)}
-        style={{background: isEmpty?'#475569':'#1e40af', borderRadius: open?'10px 10px 0 0':10,
+        style={{background: isEmpty?'#475569':'#1e40af', borderRadius: renaming?'0':(open?'10px 10px 0 0':10),
                 padding:'12px 16px', display:'flex', alignItems:'center',
                 justifyContent:'space-between', cursor:'pointer', userSelect:'none'}}
       >
-        <span style={{color:'#fff',fontWeight:700,fontSize:15,display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
+        <span style={{color:'#fff',fontWeight:700,fontSize:15,display:'flex',alignItems:'center',gap:8,flexWrap:'wrap',minWidth:0,flex:1}}>
           <span>{open?'▾':'▸'}</span>
           <span>📦 {binName}</span>
-          <span style={{background:'rgba(255,255,255,.25)',borderRadius:99,padding:'2px 8px',fontSize:11,fontWeight:700}}>
+          {location && <span style={{fontWeight:400,fontSize:13,color:'rgba(255,255,255,.75)',whiteSpace:'nowrap'}}>· {location}</span>}
+          <span style={{background:'rgba(255,255,255,.25)',borderRadius:99,padding:'2px 8px',fontSize:11,fontWeight:700,flexShrink:0}}>
             {list.length} item{list.length!==1?'s':''}
           </span>
           {selected.size>0 && (
-            <span style={{background:'#dc2626',borderRadius:99,padding:'2px 8px',fontSize:11,fontWeight:700}}>
+            <span style={{background:'#dc2626',borderRadius:99,padding:'2px 8px',fontSize:11,fontWeight:700,flexShrink:0}}>
               {selected.size} selected
             </span>
           )}
         </span>
-        <span style={{display:'flex',gap:8}} onClick={e=>e.stopPropagation()}>
+        <span style={{display:'flex',gap:8,flexShrink:0}} onClick={e=>e.stopPropagation()}>
           {selected.size>0 && (
             <button onClick={deleteSelected}
               style={{background:'#dc2626',border:'none',color:'#fff',borderRadius:6,padding:'5px 12px',cursor:'pointer',fontSize:12,fontWeight:700}}>
               🗑 Delete {selected.size}
             </button>
           )}
-          {isEmpty && isPreCreated && (
-            <button onClick={()=>{ if(window.confirm(`Delete empty bin "${binName}"?`)) onDeleteBin(binName); }}
-              style={{background:'none',border:'1px solid rgba(255,255,255,.5)',color:'#fff',borderRadius:6,padding:'3px 10px',cursor:'pointer',fontSize:12}}>
-              Delete Bin
-            </button>
-          )}
+          {/* ── 3-dot menu ── */}
+          <div style={{position:'relative'}} onBlur={()=>setTimeout(()=>setMenuOpen(false),150)}>
+            <button
+              onClick={()=>setMenuOpen(m=>!m)}
+              style={{background:'rgba(255,255,255,.18)',border:'none',color:'#fff',borderRadius:6,padding:'4px 11px',cursor:'pointer',fontSize:20,lineHeight:1,fontWeight:700,letterSpacing:1}}
+            >⋯</button>
+            {menuOpen && (
+              <div style={{position:'absolute',right:0,top:'calc(100% + 6px)',background:'#1e293b',border:'1px solid #334155',borderRadius:10,overflow:'hidden',zIndex:200,minWidth:160,boxShadow:'0 8px 28px rgba(0,0,0,.5)'}}>
+                <button onClick={handleRename} style={{display:'block',width:'100%',background:'none',border:'none',color:'#f1f5f9',padding:'13px 16px',cursor:'pointer',fontSize:14,textAlign:'left',fontWeight:600}}>
+                  ✏️ Change Name
+                </button>
+                <button onClick={handleDelete} style={{display:'block',width:'100%',background:'none',border:'none',color:'#fca5a5',padding:'13px 16px',cursor:'pointer',fontSize:14,textAlign:'left',fontWeight:600,borderTop:'1px solid #334155'}}>
+                  🗑 Delete Bin
+                </button>
+              </div>
+            )}
+          </div>
         </span>
       </div>
 
@@ -8761,7 +8807,7 @@ function BinCard({ binName, list, isPreCreated, onDeleteBin, onRemove, onUpdate 
 }
 
 // ── Bins Tab ──────────────────────────────────────────────────────────────────
-function BinsTab({ items, bins, onCreateBin, onDeleteBin, onRemove, onUpdate, onDeduplicate }) {
+function BinsTab({ items, bins, binLocations, onCreateBin, onDeleteBin, onRenameBin, onRemove, onUpdate, onDeduplicate }) {
   const [newBin, setNewBin] = useState('');
   const [msg, setMsg] = useState(null);
 
@@ -8806,7 +8852,9 @@ function BinsTab({ items, bins, onCreateBin, onDeleteBin, onRemove, onUpdate, on
           binName={binName}
           list={binItems[binName]||[]}
           isPreCreated={bins.includes(binName)}
+          location={(binLocations||{})[binName]||''}
           onDeleteBin={onDeleteBin}
+          onRenameBin={onRenameBin}
           onRemove={onRemove}
           onUpdate={onUpdate}
         />
@@ -9453,12 +9501,40 @@ function App() {
   }
   function deleteBin(name) {
     setData(d => {
-      const updated = {...d, bins: d.bins.filter(b=>b!==name)};
+      const newBinLocations = {...(d.binLocations||{})};
+      delete newBinLocations[name];
+      const updated = {
+        ...d,
+        bins: d.bins.filter(b=>b!==name),
+        inventory: d.inventory.map(i => i.bin === name ? {...i, bin: ''} : i),
+        binLocations: newBinLocations
+      };
       // Immediately write Excel to remove the deleted bin's sheet
       if (typeof XLSX !== 'undefined' && token) {
         getToken().then(t => {
           if (t) writeOneDriveExcel(t, updated.inventory||[], updated.bins||[])
                    .catch(e => console.error('Excel bin-delete sync failed:', e));
+        });
+      }
+      return updated;
+    });
+  }
+  function renameBin(oldName, newName) {
+    const upper = newName.toUpperCase().trim();
+    if (!upper || upper === oldName) return;
+    setData(d => {
+      const newBins = d.bins.map(b => b === oldName ? upper : b).sort();
+      const newInventory = d.inventory.map(i => i.bin === oldName ? {...i, bin: upper} : i);
+      const newBinLocations = {...(d.binLocations||{})};
+      if (newBinLocations[oldName] !== undefined) {
+        newBinLocations[upper] = newBinLocations[oldName];
+        delete newBinLocations[oldName];
+      }
+      const updated = {...d, bins: newBins, inventory: newInventory, binLocations: newBinLocations};
+      if (typeof XLSX !== 'undefined' && token) {
+        getToken().then(t => {
+          if (t) writeOneDriveExcel(t, updated.inventory||[], updated.bins||[])
+                   .catch(e => console.error('Excel bin-rename sync failed:', e));
         });
       }
       return updated;
@@ -9532,7 +9608,7 @@ function App() {
       <div className="tabs">{tabs.map(t=><div key={t.id} className={`tab${activeTab===t.id?' active':''}`} onClick={()=>setActiveTab(t.id)}>{t.label}</div>)}</div>
       {activeTab==='add'&&<AddTab onAdd={addItem} bins={[...new Set([...(data.bins||[]),...(data.inventory||[]).map(i=>i.bin).filter(Boolean)])].sort()} onStartScan={startScan} scanMode={scanMode} setScanMode={setScanMode}/>}
       {activeTab==='inventory'&&<InventoryTab items={data.inventory||[]} onRemove={removeItem} onUpdate={updateItem}/>}
-      {activeTab==='bins'&&<BinsTab items={data.inventory||[]} bins={data.bins||[]} onCreateBin={createBin} onDeleteBin={deleteBin} onRemove={removeItem} onUpdate={updateItem} onDeduplicate={handleDeduplicate}/>}
+      {activeTab==='bins'&&<BinsTab items={data.inventory||[]} bins={data.bins||[]} binLocations={data.binLocations||{}} onCreateBin={createBin} onDeleteBin={deleteBin} onRenameBin={renameBin} onRemove={removeItem} onUpdate={updateItem} onDeduplicate={handleDeduplicate}/>}
       {activeTab==='labels'&&<BinLabelsTab bins={data.bins||[]} inventory={data.inventory||[]} binLocations={data.binLocations||{}} onSaveBinLocation={saveBinLocation} namedLocations={data.namedLocations||[]} onSaveNamedLocation={saveNamedLocation}/>}
       {activeTab==='alerts'&&<AlertsTab items={data.inventory||[]}/>}
     </div>
