@@ -52,7 +52,7 @@
     .empty{text-align:center;padding:40px;color:#94a3b8}
     .search-row{display:flex;gap:8px;margin-bottom:16px}
     .search-row input{flex:1}
-    .product-name{font-size:12px;color:#2563eb;font-weight:600}
+    .product-name{font-size:12px;color:#374151;font-weight:500;line-height:1.35;margin-top:2px}
     .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
     .alert{padding:12px 16px;border-radius:9px;font-size:13px;margin-bottom:12px;line-height:1.5}
     .alert-red{background:#fee2e2;color:#991b1b}
@@ -8909,14 +8909,16 @@ function InventoryTab({ items, allData, onRemove, onUpdate }) {
 }
 
 // ── Bin Card (collapsible, with edit / delete / bulk-select) ──────────────────
-function BinCard({ binName, list, isPreCreated, location, parItems, allInventory, cases, onDeleteBin, onClearBin, onRenameBin, onRemove, onUpdate }) {
-  const [open,      setOpen]      = useState(false);
-  const [selected,  setSelected]  = useState(new Set());
-  const [editingId, setEditingId] = useState(null);
-  const [editForm,  setEditForm]  = useState({});
-  const [menuOpen,  setMenuOpen]  = useState(false);
-  const [renaming,  setRenaming]  = useState(false);
-  const [newName,   setNewName]   = useState('');
+function BinCard({ binName, list, isPreCreated, location, parItems, allInventory, cases, onDeleteBin, onClearBin, onRenameBin, onRemove, onUpdate, onSaveParLevel }) {
+  const [open,         setOpen]         = useState(false);
+  const [selected,     setSelected]     = useState(new Set());
+  const [editingId,    setEditingId]    = useState(null);
+  const [editForm,     setEditForm]     = useState({});
+  const [menuOpen,     setMenuOpen]     = useState(false);
+  const [renaming,     setRenaming]     = useState(false);
+  const [newName,      setNewName]      = useState('');
+  const [parEditorOpen,setParEditorOpen]= useState(false);
+  const [parEditorRows,setParEditorRows]= useState([]);
 
   const isEmpty     = list.length === 0;
   const allSelected = list.length > 0 && selected.size === list.length;
@@ -9008,6 +9010,29 @@ function BinCard({ binName, list, isPreCreated, location, parItems, allInventory
     if (v && v !== binName) onRenameBin(binName, v);
     setRenaming(false);
   }
+  function openParEditor() {
+    setMenuOpen(false);
+    // Start with current parItems (custom or built-in), or empty
+    const rows = (parItems||[]).map(p => ({ ref: p.ref||'', desc: p.desc||'', parQty: p.parQty||1 }));
+    setParEditorRows(rows.length ? rows : [{ ref:'', desc:'', parQty:1 }]);
+    setParEditorOpen(true);
+  }
+  function updateParRow(idx, field, val) {
+    setParEditorRows(rows => rows.map((r,i) => i===idx ? {...r, [field]: val} : r));
+  }
+  function addParRow() {
+    setParEditorRows(rows => [...rows, { ref:'', desc:'', parQty:1 }]);
+  }
+  function removeParRow(idx) {
+    setParEditorRows(rows => rows.filter((_,i) => i!==idx));
+  }
+  function saveParEditor() {
+    const cleaned = parEditorRows
+      .filter(r => r.ref.trim())
+      .map(r => ({ ref: r.ref.trim().toUpperCase(), desc: r.desc.trim(), parQty: Math.max(1, Number(r.parQty)||1) }));
+    if (onSaveParLevel) onSaveParLevel(binName, cleaned);
+    setParEditorOpen(false);
+  }
 
   return (
     <div style={{marginBottom:12}}>
@@ -9064,6 +9089,9 @@ function BinCard({ binName, list, isPreCreated, location, parItems, allInventory
               <div style={{position:'absolute',right:0,top:'calc(100% + 6px)',background:'#1e293b',border:'1px solid #334155',borderRadius:10,overflow:'hidden',zIndex:200,minWidth:160,boxShadow:'0 8px 28px rgba(0,0,0,.5)'}}>
                 <button onClick={handleRename} style={{display:'block',width:'100%',background:'none',border:'none',color:'#f1f5f9',padding:'13px 16px',cursor:'pointer',fontSize:14,textAlign:'left',fontWeight:600}}>
                   ✏️ Change Name
+                </button>
+                <button onClick={openParEditor} style={{display:'block',width:'100%',background:'none',border:'none',color:'#a5f3fc',padding:'13px 16px',cursor:'pointer',fontSize:14,textAlign:'left',fontWeight:600,borderTop:'1px solid #334155'}}>
+                  ⚖️ Edit Par Levels
                 </button>
                 <button onClick={handleClear} style={{display:'block',width:'100%',background:'none',border:'none',color:'#fdba74',padding:'13px 16px',cursor:'pointer',fontSize:14,textAlign:'left',fontWeight:600,borderTop:'1px solid #334155'}}>
                   🧹 Clear Bin
@@ -9147,8 +9175,8 @@ function BinCard({ binName, list, isPreCreated, location, parItems, allInventory
                       </td>
                       <td>
                         <div style={{fontWeight:700,fontSize:11,color:'#6b7280',letterSpacing:.5}}>REF</div>
-                        <div style={{fontWeight:600}}>{item.productNumber}</div>
-                        {item.productName&&item.productName!==item.productNumber&&<div className="product-name">{item.productName}</div>}
+                        <div style={{fontWeight:700,fontSize:13}}>{item.productNumber}</div>
+                        {(() => { const d = (item.productName&&item.productName!==item.productNumber) ? item.productName : getDesc(item.productNumber); return d ? <div className="product-name">{d}</div> : null; })()}
                       </td>
                       <td>{item.lot||'—'}</td>
                       <td>{fmtDate(item.expDate)} <ExpiryBadge d={item.expDate}/></td>
@@ -9165,6 +9193,70 @@ function BinCard({ binName, list, isPreCreated, location, parItems, allInventory
               </table>
             </div>
           )}
+        </div>
+      )}
+
+      {/* ── Par Level Editor Modal ── */}
+      {parEditorOpen && (
+        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.75)',zIndex:1000,display:'flex',alignItems:'flex-start',justifyContent:'center',padding:'16px 12px',overflowY:'auto'}}>
+          <div style={{background:'#1e293b',borderRadius:16,padding:20,width:'100%',maxWidth:560,boxShadow:'0 20px 60px rgba(0,0,0,.6)',marginTop:20}}>
+            <div style={{color:'#f1f5f9',fontWeight:800,fontSize:17,marginBottom:4}}>⚖️ Par Levels — {binName}</div>
+            <div style={{color:'#94a3b8',fontSize:13,marginBottom:16}}>Set the required quantity per REF number. Quantities are tracked by REF regardless of LOT number.</div>
+
+            {/* Column headers */}
+            <div style={{display:'grid',gridTemplateColumns:'1fr 2fr 70px 36px',gap:6,marginBottom:6,padding:'0 2px'}}>
+              <div style={{fontSize:11,fontWeight:700,color:'#64748b',letterSpacing:.4}}>REF</div>
+              <div style={{fontSize:11,fontWeight:700,color:'#64748b',letterSpacing:.4}}>DESCRIPTION</div>
+              <div style={{fontSize:11,fontWeight:700,color:'#64748b',letterSpacing:.4,textAlign:'center'}}>PAR QTY</div>
+              <div/>
+            </div>
+
+            {/* Rows */}
+            <div style={{display:'flex',flexDirection:'column',gap:6,maxHeight:'55vh',overflowY:'auto',paddingRight:2}}>
+              {parEditorRows.map((row, idx) => (
+                <div key={idx} style={{display:'grid',gridTemplateColumns:'1fr 2fr 70px 36px',gap:6,alignItems:'center'}}>
+                  <input
+                    value={row.ref}
+                    onChange={e=>updateParRow(idx,'ref',e.target.value)}
+                    placeholder="REF"
+                    style={{background:'#0f172a',border:'1.5px solid #334155',borderRadius:7,padding:'8px 9px',color:'#f1f5f9',fontSize:13,width:'100%'}}
+                  />
+                  <input
+                    value={row.desc}
+                    onChange={e=>updateParRow(idx,'desc',e.target.value)}
+                    placeholder="Description (optional)"
+                    style={{background:'#0f172a',border:'1.5px solid #334155',borderRadius:7,padding:'8px 9px',color:'#f1f5f9',fontSize:13,width:'100%'}}
+                  />
+                  <input
+                    type="number" min="1"
+                    value={row.parQty}
+                    onChange={e=>updateParRow(idx,'parQty',e.target.value)}
+                    style={{background:'#0f172a',border:'1.5px solid #334155',borderRadius:7,padding:'8px 6px',color:'#f1f5f9',fontSize:13,width:'100%',textAlign:'center'}}
+                  />
+                  <button onClick={()=>removeParRow(idx)}
+                    style={{background:'#7f1d1d',border:'none',color:'#fca5a5',borderRadius:7,padding:'8px',cursor:'pointer',fontSize:14,fontWeight:700,width:36,height:36,display:'flex',alignItems:'center',justifyContent:'center'}}>
+                    ✕
+                  </button>
+                </div>
+              ))}
+            </div>
+
+            <button onClick={addParRow}
+              style={{width:'100%',background:'#1e3a5f',border:'1.5px dashed #3b82f6',color:'#60a5fa',borderRadius:8,padding:'9px',fontWeight:600,cursor:'pointer',fontSize:13,marginTop:10}}>
+              + Add REF
+            </button>
+
+            <div style={{display:'flex',gap:10,marginTop:16}}>
+              <button onClick={()=>setParEditorOpen(false)}
+                style={{flex:1,background:'#334155',border:'none',color:'#f1f5f9',borderRadius:8,padding:'12px 0',fontWeight:700,fontSize:14,cursor:'pointer'}}>
+                Cancel
+              </button>
+              <button onClick={saveParEditor}
+                style={{flex:2,background:'#2563eb',border:'none',color:'#fff',borderRadius:8,padding:'12px 0',fontWeight:700,fontSize:14,cursor:'pointer'}}>
+                ✓ Save Par Levels
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
@@ -9262,7 +9354,7 @@ function CasesTab({ cases, binLocations, onDeleteCase, onClearAllCases }) {
 }
 
 // ── Bins Tab ──────────────────────────────────────────────────────────────────
-function BinsTab({ items, bins, binLocations, cases, onCreateBin, onDeleteBin, onClearBin, onRenameBin, onRemove, onUpdate, onDeduplicate }) {
+function BinsTab({ items, bins, binLocations, cases, parLevels, onCreateBin, onDeleteBin, onClearBin, onRenameBin, onRemove, onUpdate, onDeduplicate, onSaveParLevel }) {
   const [newBin, setNewBin] = useState('');
   const [msg, setMsg] = useState(null);
 
@@ -9308,7 +9400,7 @@ function BinsTab({ items, bins, binLocations, cases, onCreateBin, onDeleteBin, o
           list={binItems[binName]||[]}
           isPreCreated={bins.includes(binName)}
           location={(binLocations||{})[binName]||''}
-          parItems={getBinParTemplate(binName)}
+          parItems={getBinParTemplate(binName, parLevels||{})}
           allInventory={items}
           cases={cases||[]}
           onDeleteBin={onDeleteBin}
@@ -9316,6 +9408,7 @@ function BinsTab({ items, bins, binLocations, cases, onCreateBin, onDeleteBin, o
           onRenameBin={onRenameBin}
           onRemove={onRemove}
           onUpdate={onUpdate}
+          onSaveParLevel={onSaveParLevel}
         />
       ))}
     </div>
@@ -9323,7 +9416,7 @@ function BinsTab({ items, bins, binLocations, cases, onCreateBin, onDeleteBin, o
 }
 
 // ── Alerts Tab ─────────────────────────────────────────────────────────────────
-function AlertsTab({ items, cases }) {
+function AlertsTab({ items, cases, parLevels }) {
   const expired=items.filter(i=>i.expDate&&daysUntil(i.expDate)<0);
   const s30=items.filter(i=>i.expDate&&daysUntil(i.expDate)>=0&&daysUntil(i.expDate)<=30);
   const s90=items.filter(i=>i.expDate&&daysUntil(i.expDate)>30&&daysUntil(i.expDate)<=90);
@@ -9347,7 +9440,7 @@ function AlertsTab({ items, cases }) {
     const caseMap = {};
 
     for (const binName of affectedBins) {
-      const parItems = getBinParTemplate(binName);
+      const parItems = getBinParTemplate(binName, parLevels||{});
       if (!parItems || !parItems.length) continue;
       const currentQtyMap = {};
       for (const inv of items) {
@@ -9721,8 +9814,13 @@ const PAR_LEVELS = {
   ],
 };
 // Return the par template for a bin name, or null if none defined
-function getBinParTemplate(binName) {
+function getBinParTemplate(binName, customParLevels) {
   const upper = (binName||'').toUpperCase().trim();
+  // Custom per-bin par levels (saved in data) take priority over hardcoded templates
+  if (customParLevels && customParLevels[upper] && customParLevels[upper].length > 0) {
+    return customParLevels[upper];
+  }
+  // Fall back to built-in templates matched by bin name keywords
   if (upper.startsWith('ARG')) return PAR_LEVELS.ARG;
   if (upper.includes('SMALL SHELL')) return PAR_LEVELS.SMALL_SHELL;
   if (upper.includes('STD SHELL') || upper.includes('STANDARD SHELL')) return PAR_LEVELS.STD_SHELL;
@@ -10066,7 +10164,7 @@ function BinLabelsTab({ bins, inventory, binLocations, binIds, locationCoords, o
 // ── Main App ──────────────────────────────────────────────────────────────────
 function App() {
   const [token, setToken] = useState(null);
-  const [data, setData] = useState({ inventory: [], bins: [], gtinMap: {}, binLocations: {}, namedLocations: [], binIds: {}, locationCoords: {}, cases: [] });
+  const [data, setData] = useState({ inventory: [], bins: [], gtinMap: {}, binLocations: {}, namedLocations: [], binIds: {}, locationCoords: {}, cases: [], parLevels: {} });
   const [activeTab, setActiveTab] = useState('add');
   const [syncStatus, setSyncStatus] = useState('ok');
   const [syncMsg, setSyncMsg] = useState('');
@@ -10122,7 +10220,8 @@ function App() {
       // One-time cleanup: remove any items stuck in '__case__' bin (caused by a past bug)
       const cleanedInventory = dedupedInventory.filter(i => i.bin !== '__case__');
       const hadCaseBin = cleanedInventory.length < dedupedInventory.length;
-      setData({ inventory: cleanedInventory, bins, gtinMap, binLocations, namedLocations, binIds, locationCoords, cases });
+      const parLevels = (d && d.parLevels) ? d.parLevels : {};
+      setData({ inventory: cleanedInventory, bins, gtinMap, binLocations, namedLocations, binIds, locationCoords, cases, parLevels });
       // Background: geocode any known locations that don't have coords yet
       const missingGeo = KNOWN_LOCATIONS.filter(loc => !locationCoords[loc.name]);
       if (missingGeo.length) {
@@ -10365,6 +10464,10 @@ function App() {
   function clearAllCases() {
     setData(d => ({...d, cases: []}));
   }
+  function saveParLevel(binName, items) {
+    const key = (binName||'').toUpperCase().trim();
+    setData(d => ({...d, parLevels: {...(d.parLevels||{}), [key]: items}}));
+  }
   function deleteBin(name) {
     setData(d => {
       const newBinLocations = {...(d.binLocations||{})};
@@ -10471,7 +10574,7 @@ function App() {
     const affectedBins = new Set();
     for (const c of allCases) for (const item of (c.items||[])) { if (item.bin) affectedBins.add(item.bin); }
     for (const binName of affectedBins) {
-      const parItems = getBinParTemplate(binName);
+      const parItems = getBinParTemplate(binName, data.parLevels||{});
       if (!parItems) continue;
       const qtyMap = {};
       for (const inv of data.inventory) { if (inv.bin === binName) { const r = _normR(inv.productNumber); qtyMap[r] = (qtyMap[r]||0) + (inv.qty||1); } }
@@ -10515,10 +10618,10 @@ function App() {
       <div className="tabs">{tabs.map(t=><div key={t.id} className={`tab${activeTab===t.id?' active':''}`} onClick={()=>setActiveTab(t.id)}>{t.label}</div>)}</div>
       {activeTab==='add'&&<AddTab onAdd={addItem} onRemoveManual={removeItemManual} inventory={data.inventory||[]} bins={[...new Set([...(data.bins||[]),...(data.inventory||[]).map(i=>i.bin).filter(Boolean)])].sort()} binLocations={data.binLocations||{}} onStartScan={startScan} scanMode={scanMode} setScanMode={setScanMode}/>}
       {activeTab==='inventory'&&<InventoryTab items={data.inventory||[]} allData={data} onRemove={removeItem} onUpdate={updateItem}/>}
-      {activeTab==='bins'&&<BinsTab items={data.inventory||[]} bins={data.bins||[]} binLocations={data.binLocations||{}} cases={data.cases||[]} onCreateBin={createBin} onDeleteBin={deleteBin} onClearBin={clearBin} onRenameBin={renameBin} onRemove={removeItem} onUpdate={updateItem} onDeduplicate={handleDeduplicate}/>}
+      {activeTab==='bins'&&<BinsTab items={data.inventory||[]} bins={data.bins||[]} binLocations={data.binLocations||{}} cases={data.cases||[]} parLevels={data.parLevels||{}} onCreateBin={createBin} onDeleteBin={deleteBin} onClearBin={clearBin} onRenameBin={renameBin} onRemove={removeItem} onUpdate={updateItem} onDeduplicate={handleDeduplicate} onSaveParLevel={saveParLevel}/>}
       {activeTab==='cases'&&<CasesTab cases={data.cases||[]} activeCase={activeCase} bins={[...new Set([...(data.bins||[]),...(data.inventory||[]).map(i=>i.bin).filter(Boolean)])].sort()} binLocations={data.binLocations||{}} onStartCase={startCase} onEndCase={endCase} onStartScan={startCaseScan} onDeleteCase={deleteCase} onClearAllCases={clearAllCases}/>}
       {activeTab==='labels'&&<BinLabelsTab bins={data.bins||[]} inventory={data.inventory||[]} binLocations={data.binLocations||{}} binIds={data.binIds||{}} locationCoords={data.locationCoords||{}} onSaveBinLocation={saveBinLocation} onUpdateBinLocation={saveBinLocation} namedLocations={data.namedLocations||[]} onSaveNamedLocation={saveNamedLocation}/>}
-      {activeTab==='alerts'&&<AlertsTab items={data.inventory||[]} cases={data.cases||[]}/>}
+      {activeTab==='alerts'&&<AlertsTab items={data.inventory||[]} cases={data.cases||[]} parLevels={data.parLevels||{}}/>}
     </div>
   );
 }
